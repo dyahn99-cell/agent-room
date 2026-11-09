@@ -120,6 +120,21 @@ const newRoom = async (title, cwd) => (await api('/api/rooms', { method: 'POST',
       await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ memo: 'slides 폴더 안에서만 작업' }) });
       await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 시작' }) }); await idle(rid);
       check('방 메모가 AI에게 전달', fs.readFileSync(LOG, 'utf8').includes('[방 메모 — 꼭 지킬 것] slides 폴더 안에서만 작업'), 'missing'); }
+    // 12. 방 기억: AI가 정리 → 저장·본문에서 숨김·다음 프롬프트 전달·사용자 수정·이전 버전 복구
+    { const d = W('mem'); const rid = await newRoom('기억', d); fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 이거 기억해' }) });
+      let r = await idle(rid); const m = r.messages.filter((x) => x.role === 'agent').pop();
+      check('AI가 정리한 기억 저장', /슬라이드는 10장/.test(r.memory) && r.memoryBy === 'claude', r.memory);
+      check('기억 블록은 메시지에서 숨김 + 정리 표시', !m.text.includes('<기억>') && m.memoryUpdate && m.memoryUpdate.added === 2, JSON.stringify(m.memoryUpdate));
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@코덱스 확인' }) }); await idle(rid);
+      check('기억이 다른 AI에게 전달', /\[방 기억 — 지금까지 합의한 내용\]\n- claude 합의: 슬라이드는 10장/.test(fs.readFileSync(LOG, 'utf8')), 'missing');
+      r = (await api(`/api/rooms/${rid}/memory`, { method: 'POST', body: JSON.stringify({ text: '- 슬라이드는 12장' }) })).body;
+      check('사용자가 기억 수정', r.memory === '- 슬라이드는 12장' && r.memoryBy === 'user', r.memory);
+      const idx = r.memoryHistory[r.memoryHistory.length - 1].i;
+      r = (await api(`/api/rooms/${rid}/memory`, { method: 'POST', body: JSON.stringify({ restore: idx }) })).body;
+      check('이전 버전으로 복구', /슬라이드는 10장/.test(r.memory), r.memory);
+      const ex = await api(`/api/rooms/${rid}/memexport`, { method: 'POST' });
+      check('DECISIONS.md 내보내기', ex.status === 200 && /슬라이드는 10장/.test(fs.readFileSync(path.join(d, 'DECISIONS.md'), 'utf8')), ex.status); }
   } catch (e) { check('테스트 실행', false, e.stack); }
   srv.kill('SIGTERM'); await sleep(500);
   const fail = results.filter((r) => !r[1]).length;

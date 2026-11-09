@@ -15,7 +15,7 @@ const ROOMS_DIR = path.join(DATA, 'rooms');
 const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS]) fs.mkdirSync(d, { recursive: true });
 
@@ -272,6 +272,8 @@ function roomSummary(r) {
     queueInfo: runtime(r.id).queue.map((q) => ({ agent: q.agent, round: q.debate ? q.debate.round : null, final: !!(q.debate && q.debate.final) })),
     lastAgent: r.lastAgent || null,
     memo: r.memo || '',
+    memory: r.memory || '', memoryBy: r.memoryBy || null, memoryAt: r.memoryAt || null,
+    memoryHistory: (r.memoryHistory || []).slice(-15).map((h, i, arr) => ({ i: (r.memoryHistory.length - arr.length) + i, at: h.at, by: h.by, lines: String(h.text || '').split('\n').filter((x) => x.trim()).length })),
     busy: runtime(r.id).current ? runtime(r.id).current.agent : null,
     preview: last ? clip(last.text.replace(/\s+/g, ' '), 80) : '',
   };
@@ -445,6 +447,31 @@ function friendlyError(agentId, text) {
   return null;
 }
 
+// ---------- 방 기억: AI들이 합의한 내용을 같이 다듬어 가는 정리본 ----------
+const MEM_RE = /<기억>\s*([\s\S]*?)\s*<\/기억>/g;
+function extractMemory(text) {
+  let last = null, m;
+  MEM_RE.lastIndex = 0;
+  while ((m = MEM_RE.exec(text))) last = m[1];
+  const rest = String(text).replace(MEM_RE, '').replace(/\n{3,}/g, '\n\n').trim();
+  return { memory: last != null ? last.trim().slice(0, 4000) : null, rest };
+}
+function memDiff(a, b) {
+  const A = new Set(String(a || '').split('\n').map((x) => x.trim()).filter(Boolean));
+  const B = new Set(String(b || '').split('\n').map((x) => x.trim()).filter(Boolean));
+  return { added: [...B].filter((x) => !A.has(x)).length, removed: [...A].filter((x) => !B.has(x)).length };
+}
+function setMemory(room, text, by, msgId) {
+  const prev = room.memory || '';
+  if (text.trim() === prev.trim()) return null;
+  room.memoryHistory = room.memoryHistory || [];
+  room.memoryHistory.push({ text: prev, at: now(), by: room.memoryBy || null });
+  if (room.memoryHistory.length > 30) room.memoryHistory.shift();
+  room.memory = text; room.memoryBy = by; room.memoryAt = now(); room.memoryMsg = msgId || null;
+  saveRoom(room); pushRoom(room);
+  return memDiff(prev, text);
+}
+
 // ---------- 프롬프트 ----------
 function speaker(m) {
   if (m.role === 'user') return '사용자';
@@ -463,6 +490,7 @@ function preamble(room, agentId) {
     `- 다른 AI에게 일을 넘기거나 의견을 물을 땐 답 맨 끝에 "다음: @이름" 한 줄을 써(${others}). 그 줄이 있을 때만 그 AI가 이어서 답해. 본문에서 이름을 말하는 건 호출이 아니야. 꼭 필요할 때만 넘겨.`,
     `- 이런 명령은 실행하지 마: ${blockList().join(', ')}. 필요하면 사용자에게 직접 하라고 말해.`,
     '- 막히거나 애매하면 먼저 다른 AI에게 물어봐. 사용자에게는 결정이 꼭 필요할 때만 물어봐.',
+    '- "방 기억"은 이 방에서 모두가 합의한 내용의 정리본이야. 대화에서 새로 합의했거나 기존 합의가 바뀌었을 때만, 답 끝("다음:" 줄보다 앞)에 <기억>…</기억> 블록으로 정리된 전체 기억을 다시 써. 중복은 합치고, 바뀐 건 고치고, 틀리거나 끝난 건 빼. 합의 안 된 개인 의견은 넣지 마. 각 줄은 "- "로 시작하고 20줄 이내. 바꿀 게 없으면 블록을 쓰지 마.',
     '- 대화 기록에서 [이름] 표시는 누가 말했는지 알려주는 거야. 네 답에는 붙이지 마.',
   ].join('\n');
 }
@@ -482,6 +510,7 @@ function buildPrompt(room, agentId, attachments) {
   const writer = room.writer === agentId;
   lines.push('', `[시스템] 현재 작성 권한: ${writer ? '너에게 있음 (파일 수정 가능)' : (room.writer ? config.agents[room.writer].name + '에게 있음 — 너는 수정 금지, 검토·의견만' : '아무도 없음 — 파일 수정 금지')}.`);
   if (room.memo && room.memo.trim()) lines.push(`[방 메모 — 꼭 지킬 것] ${clip(room.memo.trim(), 2000)}`);
+  lines.push(`[방 기억 — 지금까지 합의한 내용]\n${(room.memory || '').trim() || '(아직 없음)'}`);
   if (room._debateNote) lines.push(room._debateNote);
   const role = ROLES[ac(room, agentId).role];
   if (role) lines.push(`[시스템] 네 역할: ${role.text}`);
@@ -714,7 +743,7 @@ async function runAgent(room, job, cur) {
   }
 
   room._debateNote = job.debate ? (job.debate.final
-    ? `[시스템] 토론 정리 담당이야. 지금까지 토론을 보고 ① 합의한 점 ② 남은 쟁점 ③ 결론·다음 할 일을 짧게 정리해. "다음:" 줄은 쓰지 마.`
+    ? `[시스템] 토론 정리 담당이야. 지금까지 토론을 보고 ① 합의한 점 ② 남은 쟁점 ③ 결론·다음 할 일을 짧게 정리해. 합의한 점은 기존 방 기억과 합쳐서 <기억>…</기억> 블록으로 다시 써. "다음:" 줄은 쓰지 마.`
     : job.debate.first
       ? `[시스템] 토론 ${job.debate.round}/${job.debate.total}라운드, 네가 첫 발언자야. 주제에 대한 네 입장을 근거와 함께 먼저 제시해. 결론 내지 말고 "다음:" 줄도 쓰지 마.`
       : `[시스템] 토론 ${job.debate.round}/${job.debate.total}라운드야. 앞사람 의견에 동의할 건 짧게 인정하고, 반박하거나 보탤 것 위주로 네 입장을 말해. 결론 내지 말고 "다음:" 줄도 쓰지 마.`) : null;
@@ -788,6 +817,14 @@ async function runAgent(room, job, cur) {
 
   for (const s of msg.steps) if (s.status === 'running') s.status = cur.stopped ? 'stopped' : 'done';
   if (finalText && finalText.trim()) msg.text = finalText.trim();
+  if (msg.text && msg.text.includes('<기억>')) {
+    const ex = extractMemory(msg.text);
+    msg.text = ex.rest || '(방 기억을 정리했어요)';
+    if (ex.memory != null && !cur.stopped && !errorText && code === 0) {
+      const d = setMemory(room, ex.memory, agentId, msg.id);
+      if (d) msg.memoryUpdate = d;
+    }
+  }
   delete msg.thinking;
   delete msg.live;
   delete msg.activity;
@@ -1094,6 +1131,23 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: true });
       }
       if (sub === '/stop' && req.method === 'POST') { stopRoom(room); return send(res, 200, { ok: true }); }
+      if (sub === '/memory' && req.method === 'POST') {
+        const b = await readJSON(req);
+        let text = null;
+        if (typeof b.text === 'string') text = b.text.slice(0, 4000);
+        else if (Number.isInteger(b.restore) && room.memoryHistory && room.memoryHistory[b.restore]) text = room.memoryHistory[b.restore].text;
+        if (text == null) return send(res, 400, { error: '잘못된 요청' });
+        const d = setMemory(room, text, 'user');
+        if (d) { const sm = systemMsg(room, `사용자가 방 기억을 고쳤어요 (+${d.added} −${d.removed}).`); sm.forAgents = true; }
+        return send(res, 200, roomSummary(room));
+      }
+      if (sub === '/memexport' && req.method === 'POST') {
+        if (unsafeWriteDir(room.cwd)) return send(res, 400, { error: '홈 폴더에는 파일을 만들지 않아요. 프로젝트 폴더로 방 폴더를 바꿔주세요.' });
+        const body = `# 합의 사항 (Agent Room: ${room.title})\n\n${(room.memory || '').trim() || '(아직 없음)'}\n\n_마지막 정리: ${new Date(room.memoryAt || now()).toLocaleString('ko-KR')}_\n`;
+        fs.writeFileSync(path.join(room.cwd, 'DECISIONS.md'), body);
+        systemMsg(room, '방 기억을 DECISIONS.md로 내보냈어요.');
+        return send(res, 200, { ok: true });
+      }
       if (sub === '/dequeue' && req.method === 'POST') {
         const b = await readJSON(req);
         const rt = runtime(room.id);

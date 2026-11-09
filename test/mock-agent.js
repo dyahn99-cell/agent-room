@@ -30,6 +30,7 @@ async function main() {
   let reply = `${names[kind]}입니다. "${lastUser.slice(0, 40)}" 확인했어요.${writer ? ' 파일을 수정했어요.' : ' 읽기만 했어요.'}\n\n- 첫째 포인트\n- 둘째 포인트 \`code\``;
   if (/핑퐁/.test(lastUser)) reply += kind === 'claude' ? '\n\n다음: @코덱스 이어서 봐줘' : '\n\n다음: @클로드 다시 봐줘';
   if (/넘겨/.test(lastUser) && kind === 'claude') reply += '\n\n다음: @오픈코드 의견 줘';
+  if (/기억해/.test(lastUser)) reply += `\n\n<기억>\n- ${kind} 합의: 슬라이드는 10장\n- 색은 주황\n</기억>`;
   if (/언급만/.test(lastUser) && kind === 'claude') reply += '\n\n@코덱스 말도 일리가 있어.\n> @오픈코드 인용';
   const slow = /느리게/.test(lastUser);
   if (/실패멘션/.test(lastUser)) { out(kind==='claude'?{ type: 'assistant', message: { content: [{ type: 'text', text: '반쯤 하다 망했어 @코덱스 도와줘' }] } }:{type:'x'}); process.stderr.write('boom\n'); process.exit(2); }

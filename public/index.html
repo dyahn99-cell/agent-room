@@ -224,6 +224,14 @@ textarea.inp::placeholder{color:var(--text3)}
 .conn{position:fixed;top:10px;left:50%;transform:translateX(-50%);background:var(--err);color:#fff;font-size:12.5px;padding:5px 12px;border-radius:999px;z-index:40;display:none}
 .conn.show{display:block}
 
+/* 0.6 기억 */
+.memdoc{margin:8px 12px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 14px;font-size:14px}
+.memdoc .md ul{margin:0;padding-left:1.2em}
+.memhd{display:flex;align-items:center;gap:8px;margin:10px 14px 0;font-size:12px;color:var(--text3)}
+.memchip{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:12.5px;padding:4px 10px;border-radius:999px;background:#ECFDF5;color:#047857;font-weight:600;cursor:pointer}
+.hist{margin:4px 12px;font-size:12.5px;color:var(--text2)}
+.hist div{display:flex;align-items:center;gap:8px;padding:5px 2px;border-bottom:1px dashed var(--line)}
+
 /* 0.5 */
 .elapsed{font-size:12px;color:var(--text3);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .elapsed.stale{color:#D9822B}
@@ -615,8 +623,9 @@ function renderPanel(){
   const r = curRoom();
   if (!r){ el.innerHTML = `<div style="padding:24px 16px;color:var(--text3);font-size:13px">방을 고르면 멤버가 보여요</div>`; return; }
   const sets = S.messages.filter(m => m.role==='agent' && m.changes && m.changes.length);
-  el.innerHTML = `<div class="ptabs"><button data-tab="members" class="${S.panelTab==='members'?'on':''}">멤버</button><button data-tab="results" class="${S.panelTab==='results'?'on':''}">결과물${sets.length?' '+sets.length:''}</button></div>
-    <div class="pbody">${S.panelTab==='members' ? S.agents.map(a => memberCard(r, a)).join('') + `<div style="padding:4px 16px;font-size:12px;color:var(--text3)">카드를 누르면 모델·역할을 바꿀 수 있어요</div>` : resultsHTML(r)}</div>`;
+  const memN = (r.memory||'').split('\n').filter(x=>x.trim()).length;
+  el.innerHTML = `<div class="ptabs"><button data-tab="members" class="${S.panelTab==='members'?'on':''}">멤버</button><button data-tab="memory" class="${S.panelTab==='memory'?'on':''}">기억${memN?' '+memN:''}</button><button data-tab="results" class="${S.panelTab==='results'?'on':''}">결과물${sets.length?' '+sets.length:''}</button></div>
+    <div class="pbody">${S.panelTab==='members' ? S.agents.map(a => memberCard(r, a)).join('') + `<div style="padding:4px 16px;font-size:12px;color:var(--text3)">카드를 누르면 모델·역할을 바꿀 수 있어요</div>` : S.panelTab==='memory' ? memoryHTML(r) : resultsHTML(r)}</div>`;
   el.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { S.panelTab = b.dataset.tab; renderPanel(); });
   el.querySelectorAll('[data-mem]').forEach(c => c.onclick = (e) => { if (e.target.closest('[data-wr]')) return; openAgents(); });
   el.querySelectorAll('[data-wr]').forEach(b => b.onclick = async (e) => {
@@ -624,6 +633,28 @@ function renderPanel(){
     try { await api('/api/rooms/'+r.id, { method:'PATCH', body:JSON.stringify({ writer: r.writer===id ? null : id }) }); } catch(err){ toast(err.message); }
   });
   if (S.panelTab === 'results') bindResults(el);
+  if (S.panelTab === 'memory') bindMemory(el, r);
+}
+function memoryHTML(r){
+  const by = r.memoryBy ? (r.memoryBy==='user' ? '내가' : esc(agent(r.memoryBy).name)+'이(가)') : '';
+  const hist = (r.memoryHistory||[]).slice().reverse();
+  return `<div class="memhd"><span>AI들이 합의하면서 스스로 정리해 가요. 매번 모든 AI에게 전달돼요.</span></div>
+    <div class="memdoc">${(r.memory||'').trim() ? `<div class="md">${md(r.memory)}</div>` : '<div style="color:var(--text3);font-size:13px">아직 합의한 내용이 없어요. 토론하거나 같이 정하면 여기에 쌓여요.</div>'}</div>
+    ${r.memoryAt ? `<div class="memhd"><span>마지막 정리: ${by} ${fmtTime(r.memoryAt)}</span></div>` : ''}
+    <div style="display:flex;gap:6px;margin:8px 12px"><button class="btn sm" id="memEdit">직접 고치기</button><button class="btn sm" id="memExport" ${(r.memory||'').trim()?'':'disabled'}>DECISIONS.md로 내보내기</button></div>
+    ${hist.length ? `<div class="rsec" style="margin:14px 14px 4px">이전 버전</div><div class="hist">${hist.map(h=>`<div><span>${fmtTime(h.at)}</span><span style="color:var(--text3)">${h.by?(h.by==='user'?'나':esc(agent(h.by).name)):'처음'} · ${h.lines}줄</span><span class="spacer"></span><button class="linkbtn muted" data-restore="${h.i}">이 버전으로</button></div>`).join('')}</div>` : ''}`;
+}
+function bindMemory(el, r){
+  $('#memEdit').onclick = () => {
+    showModal(`<header><h2>방 기억 고치기</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
+      <div class="mbody"><p style="margin:0 0 10px;color:var(--text2);font-size:13.5px">고친 내용은 AI들에게도 "사용자가 고쳤다"고 알려줘요. 각 줄은 "- "로 시작하면 깔끔해요.</p>
+      <textarea class="reason" id="memTxt" style="min-height:220px;font-family:var(--mono);font-size:13px" maxlength="4000">${esc(r.memory||'')}</textarea></div>
+      <footer><button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">저장</button></footer>`);
+    $('#mClose').onclick = $('#mCancel').onclick = closeOverlays;
+    $('#mOk').onclick = async () => { try { upsertRoom(await api(`/api/rooms/${r.id}/memory`, { method:'POST', body:JSON.stringify({ text:$('#memTxt').value }) })); closeOverlays(); renderPanel(); } catch(e){ toast(e.message); } };
+  };
+  $('#memExport').onclick = () => api(`/api/rooms/${r.id}/memexport`, { method:'POST' }).then(()=>toast('DECISIONS.md로 내보냈어요')).catch(e=>toast(e.message));
+  el.querySelectorAll('[data-restore]').forEach(b => b.onclick = async () => { try { upsertRoom(await api(`/api/rooms/${r.id}/memory`, { method:'POST', body:JSON.stringify({ restore:+b.dataset.restore }) })); renderPanel(); toast('그 버전으로 돌렸어요'); } catch(e){ toast(e.message); } });
 }
 
 function stepIcon(k){ return I[k] || I.tool; }
@@ -645,7 +676,8 @@ function renderMsg(m){
       <ol>${steps.map(s => `<li class="step ${s.status}"><span class="ic">${s.status==='running'?'<span class="spin" style="width:12px;height:12px"></span>':stepIcon(s.kind)}</span><div class="tx">${esc(s.title)}${s.output && S.openSteps.has(m.id)?`<pre>${esc(s.output)}</pre>`:''}</div></li>`).join('')}</ol></details>`;
   }
   let body = '';
-  const shown = (m.text || '') + (m.live ? (m.text ? '\n\n' : '') + m.live : '');
+  const hideMem = (t) => String(t||'').replace(/<기억>[\s\S]*?(<\/기억>|$)/g, '\n_🧠 방 기억 정리 중…_\n');
+  const shown = hideMem(m.text || '') + (m.live ? (m.text ? '\n\n' : '') + hideMem(m.live) : '');
   if (m.status === 'error'){
     const clean = (m.text||'').replace(/\n*⚠️[\s\S]*$/,'').trim();
     body = (clean?`<div class="md" style="margin-bottom:8px">${md(clean)}</div>`:'') + `<div class="errbox"><div class="row"><span>⚠️ ${esc(m.errorHint || '실패했어요')}</span><span class="spacer"></span><button class="btn sm" data-retry="${m.id}">${I.retry} 다시 시도</button></div>${m.errorDetail?`<details><summary>자세히</summary><pre>${esc(m.errorDetail)}</pre></details>`:''}</div>`;
@@ -654,6 +686,7 @@ function renderMsg(m){
   else if (running) body = (m.thinking?`<div class="thinking">${esc(m.thinking)}</div>`:'') + `<div class="typing"><i></i><i></i><i></i></div>`;
   let tail = '';
   if (m.status === 'stopped') tail = `<div class="st-stop">중지됨</div>`;
+  if (m.memoryUpdate) tail += `<div><span class="memchip" data-memopen>🧠 방 기억을 정리했어요 +${m.memoryUpdate.added} −${m.memoryUpdate.removed} · 보기</span></div>`;
   if (m.unexpected) tail += `<div class="st-stop" style="color:var(--err)">⚠️ 읽기 전용이었는데 파일이 바뀌었어요. 확인하고 필요하면 되돌리세요.</div>`;
   if (m.changes && m.changes.length){
     const add = m.changes.reduce((s,f)=>s+f.add,0), del = m.changes.reduce((s,f)=>s+f.del,0);
@@ -681,6 +714,7 @@ function bindMsg(el){
   });
   el.querySelectorAll('[data-diff]').forEach(b => b.onclick = () => openDiff(b.dataset.diff));
   el.querySelectorAll('[data-revert]').forEach(b => b.onclick = () => confirmRevert(b.dataset.revert));
+  el.querySelectorAll('[data-memopen]').forEach(b => b.onclick = () => openPanel('memory'));
   el.querySelectorAll('[data-undo]').forEach(b => b.onclick = () => { const m=S.messages.find(x=>x.id===b.dataset.undo); if (m) api(`/api/rooms/${S.current}/revert`, { method:'POST', body:JSON.stringify({ checkpoint:m.undoCheckpoint }) }).then(()=>toast('취소했어요')).catch(e=>toast(e.message)); });
   el.querySelectorAll('[data-retry]').forEach(b => b.onclick = () => api(`/api/rooms/${S.current}/retry`, { method:'POST', body:JSON.stringify({ msgId:b.dataset.retry }) }).catch(e=>toast(e.message)));
   el.querySelectorAll('[data-approve]').forEach(b => b.onclick = () => api(`/api/rooms/${S.current}/review`, { method:'POST', body:JSON.stringify({ msgId:b.dataset.approve, verdict:'approve' }) }).then(()=>toast('승인했어요')).catch(e=>toast(e.message)));
