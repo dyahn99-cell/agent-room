@@ -23,7 +23,7 @@ const check = (name, ok, info = '') => { results.push([name, ok]); console.log(`
 const newRoom = async (title, cwd) => (await api('/api/rooms', { method: 'POST', body: JSON.stringify({ title, cwd }) })).body.id;
 
 (async () => {
-  const srv = spawn('node', [path.join(ROOT, 'server.js')], { env: { ...process.env, AGENT_ROOM_CONFIG: path.join(TMP, 'config.json'), AGENT_ROOM_DATA: DATA, MOCK_LOG: LOG, AGENT_ROOM_TEST_SNAPSHOT_DELAY: '800' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const srv = spawn('node', [path.join(ROOT, 'server.js')], { env: { ...process.env, AGENT_ROOM_CONFIG: path.join(TMP, 'config.json'), AGENT_ROOM_DATA: DATA, MOCK_LOG: LOG, AGENT_ROOM_TEST_SNAPSHOT_DELAY: '800', CODEX_HOME: path.join(TMP, 'codexhome') }, stdio: ['ignore', 'pipe', 'pipe'] });
   let srvOut = ''; srv.stdout.on('data', (d) => srvOut += d); srv.stderr.on('data', (d) => srvOut += d);
   for (let i = 0; i < 50 && !fs.existsSync(path.join(DATA, 'url.txt')); i++) await sleep(100);
   TOK = fs.readFileSync(path.join(DATA, 'token'), 'utf8').trim();
@@ -92,6 +92,34 @@ const newRoom = async (title, cwd) => (await api('/api/rooms', { method: 'POST',
       check('폴더 밖 파일 차단', r3.status === 403 || r3.status === 404, r3.status);
       const r4 = await fetch(`${B}/view/${rid}/wrongtokenwrongtokenwrongtoken12/deck/index.html`);
       check('토큰 틀리면 거부', r4.status === 401, r4.status); }
+    // 8. 자동 호출: 본문 언급·인용은 안 부르고, '다음:' 줄만 부름
+    { const d = W('call'); const rid = await newRoom('호출', d);
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 언급만 해봐' }) });
+      let r = await idle(rid); let ag = r.messages.filter((x) => x.role === 'agent').map((x) => x.agent);
+      check('본문에서 이름만 말하면 호출 안 함', ag.join() === 'claude', ag.join());
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 넘겨 봐' }) });
+      r = await idle(rid); ag = r.messages.filter((x) => x.role === 'agent').map((x) => x.agent);
+      check("'다음:' 줄은 다음 AI 호출", ag.slice(1).join() === 'claude,opencode', ag.join()); }
+    // 9. 토론 모드: 순서·라운드·정리, 자동 호출 없음
+    { const d = W('debate'); const rid = await newRoom('토론', d);
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '핑퐁 주제로 토론', debate: { participants: ['claude', 'codex'], rounds: 2, summarizer: 'opencode' } }) });
+      const r = await idle(rid); const ag = r.messages.filter((x) => x.role === 'agent');
+      const seq = ag.map((x) => x.agent + (x.debate ? (x.debate.final ? ':정리' : ':' + x.debate.round) : '')).join(',');
+      check('토론 순서 (클로드→코덱스 ×2, 오픈코드 정리)', seq === 'claude:1,codex:1,claude:2,codex:2,opencode:정리', seq); }
+    // 10. 위험 명령 차단이 세 AI에 전달됨
+    { const d = W('block'); const rid = await newRoom('차단', d); fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 안녕' }) }); await idle(rid);
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@오픈코드 안녕' }) }); await idle(rid);
+      const log = fs.readFileSync(LOG, 'utf8');
+      check('클로드에 git push 차단 전달', log.includes('Bash(git push:*)'), 'missing');
+      check('오픈코드에 차단 권한 전달', /perm=\{"bash":\{"\*":"allow","git push":"deny"/.test(log), 'missing');
+      const rules = path.join(TMP, 'codexhome', 'rules', 'agent-room.rules');
+      check('코덱스 차단 규칙 파일 생성', fs.existsSync(rules) && fs.readFileSync(rules, 'utf8').includes('prefix_rule(pattern=["git","push"], decision="forbidden")'), 'no rules'); }
+    // 11. 방 메모가 프롬프트에 들어감
+    { const d = W('memo'); const rid = await newRoom('메모', d); fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ memo: 'slides 폴더 안에서만 작업' }) });
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 시작' }) }); await idle(rid);
+      check('방 메모가 AI에게 전달', fs.readFileSync(LOG, 'utf8').includes('[방 메모 — 꼭 지킬 것] slides 폴더 안에서만 작업'), 'missing'); }
   } catch (e) { check('테스트 실행', false, e.stack); }
   srv.kill('SIGTERM'); await sleep(500);
   const fail = results.filter((r) => !r[1]).length;

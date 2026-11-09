@@ -224,6 +224,18 @@ textarea.inp::placeholder{color:var(--text3)}
 .conn{position:fixed;top:10px;left:50%;transform:translateX(-50%);background:var(--err);color:#fff;font-size:12.5px;padding:5px 12px;border-radius:999px;z-index:40;display:none}
 .conn.show{display:block}
 
+/* 0.5 */
+.elapsed{font-size:12px;color:var(--text3);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.elapsed.stale{color:#D9822B}
+.memo{display:flex;align-items:flex-start;gap:8px;margin:0 auto;max-width:780px;padding:8px 14px;border:1px solid var(--line);background:var(--surface);border-radius:12px;font-size:13.5px;color:var(--text2);cursor:pointer;white-space:pre-wrap;max-height:4.6em;overflow:hidden}
+.memo-wrap{padding:8px 22px 0}
+.memo b{color:var(--text);flex:none}
+.dbtag{font-size:11px;padding:1px 7px;border-radius:999px;background:#FEF3C7;color:#92400E;font-weight:700}
+.faces button.debate{padding:3px 12px}
+.faces button.debate.on{border-color:#D97706;background:#FEF3C7;color:#92400E}
+.chk{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:14.5px}
+.chk .av{width:24px;height:24px;border-radius:8px}
+
 /* 0.4 멤버 패널 */
 .panel{width:310px;flex:none;border-left:1px solid var(--line);background:var(--side);display:flex;flex-direction:column;min-height:0}
 .ptabs{display:flex;gap:4px;padding:10px 12px 4px;flex:none}
@@ -462,6 +474,7 @@ function renderShell(){
   </aside>
   <main class="main">
     <div class="top" id="top"></div>
+    <div class="memo-wrap" id="memoWrap" style="display:none"></div>
     <div class="scroll" id="scroll"><div id="thread"></div></div>
     <div class="composer-wrap" id="composerWrap"></div>
   </main>
@@ -497,13 +510,68 @@ function renderTop(){
     <button class="title" id="titleBtn">${esc(r.title)}</button>
     <button class="chip folder" id="folderChip" title="${esc(r.cwd)}">${I.folder}<span>${esc(shortPath(r.cwd))}</span></button>
     <div class="spacer"></div>
+    <button class="btn sm" id="memoBtn" title="방 메모 고정">📌 메모</button>
     <button class="iconbtn ptoggle" id="panelBtn" title="멤버·결과물">${I.users}</button>
     <button class="iconbtn" id="settingsBtn" title="방 설정">${I.gear}</button>`;
   $('#menuBtn').onclick = openSide;
   $('#panelBtn').onclick = () => openPanel();
+  $('#memoBtn').onclick = openMemo;
+  renderMemo();
   $('#titleBtn').onclick = $('#settingsBtn').onclick = () => openSettings();
   $('#folderChip').onclick = () => openSettings();
 }
+
+// ---------- 방 메모 ----------
+function renderMemo(){
+  const w = $('#memoWrap'), r = curRoom(); if (!w) return;
+  if (!r || !(r.memo||'').trim()){ w.style.display='none'; w.innerHTML=''; return; }
+  w.style.display='block'; w.innerHTML = `<div class="memo" id="memoBar"><b>📌</b><span>${esc(r.memo)}</span></div>`;
+  $('#memoBar').onclick = openMemo;
+}
+function openMemo(){
+  const r = curRoom(); if (!r) return;
+  showModal(`<header><h2>방 메모</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
+    <div class="mbody"><p style="margin:0 0 10px;color:var(--text2);font-size:13.5px">여기 적은 규칙은 매번 모든 AI에게 같이 전달돼요. 예: "파일은 slides 폴더 안에서만", "답은 3줄 이내".</p>
+    <textarea class="reason" id="memoTxt" style="min-height:140px" maxlength="2000" placeholder="합의한 규칙, 진행 방향, 주의할 점">${esc(r.memo||'')}</textarea></div>
+    <footer>${(r.memo||'').trim()?'<button class="btn danger" id="memoDel" style="margin-right:auto">지우기</button>':''}<button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">고정</button></footer>`);
+  $('#mClose').onclick = $('#mCancel').onclick = closeOverlays;
+  const save = async (v) => { try { upsertRoom(await api('/api/rooms/'+r.id, { method:'PATCH', body:JSON.stringify({ memo:v }) })); closeOverlays(); renderMemo(); } catch(e){ toast(e.message); } };
+  $('#mOk').onclick = () => save($('#memoTxt').value);
+  if ($('#memoDel')) $('#memoDel').onclick = () => save('');
+  setTimeout(()=>$('#memoTxt').focus(),50);
+}
+
+// ---------- 토론 모드 ----------
+S.debate = null;
+function openDebate(){
+  const r = curRoom(); if (!r) return;
+  const on = onAgents(); const d = S.debate || { participants: on.map(a=>a.id), rounds: 2, summarizer: on.find(a=>roomAgent(a.id).role==='lead')?.id || on[0]?.id || '' };
+  showModal(`<header><h2>토론 모드</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
+    <div class="mbody"><p style="margin:0 0 6px;color:var(--text2);font-size:13.5px">다음에 보내는 메시지로 토론을 시작해요. 앱이 순서대로 돌리고, 마지막에 정리 담당이 결론을 내요.</p>
+      <div class="field"><label>참가자 (순서대로 말해요)</label>${on.map(a=>`<label class="chk"><input type="checkbox" value="${a.id}" ${d.participants.includes(a.id)?'checked':''}>${avatar(a.id)}${esc(a.name)}</label>`).join('')}</div>
+      <div class="field"><label>라운드</label><select id="dbRounds">${[1,2,3,4].map(n=>`<option value="${n}" ${d.rounds===n?'selected':''}>${n}라운드</option>`).join('')}</select></div>
+      <div class="field"><label>정리 담당</label><select id="dbSum"><option value="">없음</option>${on.map(a=>`<option value="${a.id}" ${d.summarizer===a.id?'selected':''}>${esc(a.name)}</option>`).join('')}</select></div></div>
+    <footer>${S.debate?'<button class="btn" id="dbOff" style="margin-right:auto">토론 끄기</button>':''}<button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">이렇게 진행</button></footer>`);
+  $('#mClose').onclick = $('#mCancel').onclick = closeOverlays;
+  if ($('#dbOff')) $('#dbOff').onclick = () => { S.debate = null; closeOverlays(); renderComposer(); };
+  $('#mOk').onclick = () => {
+    const parts = [...$('#modal').querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value);
+    if (parts.length < 2) return toast('2명 이상 골라주세요');
+    S.debate = { participants: parts, rounds: +$('#dbRounds').value, summarizer: $('#dbSum').value || null };
+    closeOverlays(); renderComposer(); $('#inp')?.focus();
+  };
+}
+
+// ---------- 경과 시간 표시 ----------
+function fmtDur(ms){ const s = Math.max(0, Math.floor(ms/1000)); return s < 60 ? `${s}초` : `${Math.floor(s/60)}분 ${String(s%60).padStart(2,'0')}초`; }
+setInterval(() => {
+  document.querySelectorAll('.elapsed[data-start]').forEach(el => {
+    const st = +el.dataset.start, lo = +el.dataset.last || 0, act = el.dataset.act || '';
+    const since = lo ? Date.now() - lo : Date.now() - st;
+    el.textContent = `⏱ ${fmtDur(Date.now()-st)} · ${lo ? '마지막 출력 '+fmtDur(since)+' 전' : '출력 기다리는 중'}${act ? ' · '+act : ''}`;
+    el.classList.toggle('stale', since > 120000);
+  });
+}, 1000);
 
 // ---------- 오른쪽 패널: 멤버 / 결과물 ----------
 S.panelTab = 'members';
@@ -562,7 +630,7 @@ function stepIcon(k){ return I[k] || I.tool; }
 function renderMsg(m){
   if (m.role === 'user'){
     const atts = (m.attachments||[]).length ? `<div class="atts">${m.attachments.map(a=>`<div class="att">${I.file}<span>${esc(a.name)}</span></div>`).join('')}</div>` : '';
-    return `<div class="msg user" id="m-${m.id}">${atts}<div class="bubble">${esc(m.text)}</div></div>`;
+    return `<div class="msg user" id="m-${m.id}">${atts}${m.debate?`<div class="dbtag" style="margin-bottom:5px">토론 시작 · ${m.debate.participants.map(id=>esc(agent(id).name)).join('→')} ×${m.debate.rounds}${m.debate.summarizer?' · 정리 '+esc(agent(m.debate.summarizer).name):''}</div>`:''}<div class="bubble">${esc(m.text)}</div></div>`;
   }
   if (m.role === 'system') return `<div class="msg system" id="m-${m.id}"><div>${esc(m.text)}${m.undoCheckpoint?` <button class="linkbtn" data-undo="${m.id}">되돌리기 취소</button>`:''}</div></div>`;
   const a = agent(m.agent);
@@ -600,7 +668,7 @@ function renderMsg(m){
     tail += `<div class="st-stop">스냅샷을 못 만들어서 이 작업은 되돌리기가 안 돼요</div>`;
   }
   return `<div class="msg agent" id="m-${m.id}">
-    <div class="who">${avatar(m.agent)}<span class="n" style="color:${a.color}">${esc(a.name)}</span>${m.writer?'<span class="tag">작성</span>':''}${ROLE_NAME[roomAgent(m.agent).role]&&running?`<span class="role">${ROLE_NAME[roomAgent(m.agent).role]}</span>`:''}<span class="time">${fmtTime(m.ts)}</span></div>
+    <div class="who">${avatar(m.agent)}<span class="n" style="color:${a.color}">${esc(a.name)}</span>${m.writer?'<span class="tag">작성</span>':''}${ROLE_NAME[roomAgent(m.agent).role]&&running?`<span class="role">${ROLE_NAME[roomAgent(m.agent).role]}</span>`:''}<span class="time">${fmtTime(m.ts)}</span>${m.debate?`<span class="dbtag">${m.debate.final?'정리':'토론 '+m.debate.round+'/'+m.debate.total}</span>`:''}${running?`<span class="elapsed" data-start="${m.startedAt||m.ts}" data-last="${m.lastOutAt||''}" data-act="${esc(m.activity||'')}"></span>`:''}</div>
     <div class="body">${stepsHtml}${body}${tail}${!running && m.status!=='error' && m.text ? `<div class="acts"><button data-copymsg="${m.id}">${I.copy} 복사</button></div>` : ''}</div></div>`;
 }
 
@@ -686,7 +754,7 @@ function renderComposer(){
     <div class="mentions" id="mentions"></div>
     <div class="pending" id="pending"></div>
     <div class="target" id="target"></div>
-    <div class="faces">${onAgents().map(a=>`<button data-m="${esc(a.name)}" data-id="${a.id}">${avatar(a.id)}${esc(a.name)}</button>`).join('')}<button class="all" data-m="전체" data-id="all">전체</button></div>
+    <div class="faces">${onAgents().map(a=>`<button data-m="${esc(a.name)}" data-id="${a.id}">${avatar(a.id)}${esc(a.name)}</button>`).join('')}<button class="all" data-m="전체" data-id="all">전체</button><button class="debate ${S.debate?'on':''}" id="debateBtn">💬 토론${S.debate?' 켜짐':''}</button></div>
     <textarea class="inp" id="inp" rows="1" enterkeyhint="send" placeholder="메시지를 입력하세요 (줄바꿈은 Shift+Enter)"></textarea>
     <div class="crow">
       <button class="iconbtn" id="attach" title="파일 첨부">${I.clip}</button>
@@ -699,7 +767,8 @@ function renderComposer(){
   inp.addEventListener('input', () => { autosize(); store.set('ar_draft_'+r.id, inp.value); updateSend(); mentionPopup(); updateTarget(); });
   inp.addEventListener('keydown', onKey);
   inp.addEventListener('blur', () => setTimeout(()=>$('#mentions')?.classList.remove('show'),150));
-  wrap.querySelectorAll('.faces button').forEach(b => b.onclick = () => toggleMention(b.dataset.m));
+  wrap.querySelectorAll('.faces button[data-m]').forEach(b => b.onclick = () => toggleMention(b.dataset.m));
+  $('#debateBtn').onclick = openDebate;
   updateTarget();
   $('#attach').onclick = () => $('#file').click();
   $('#file').onchange = (e) => { [...e.target.files].forEach(uploadFile); e.target.value=''; };
@@ -717,7 +786,8 @@ function updateBusy(){
   const r = curRoom(); const busy = $('#busy'), act = $('#actBtn'); if (!busy || !r) return;
   if (r.busy){
     const a = agent(r.busy);
-    const q = (r.queue||[]).map(id=>`<span class="qchip">${esc(agent(id).name)}<button data-deq="${id}" title="대기열에서 빼기">${I.x.replace(/18/g,'12')}</button></span>`).join(' ');
+    const qi = r.queueInfo || (r.queue||[]).map(a=>({agent:a}));
+    const q = qi.slice(0,5).map(x=>`<span class="qchip">${esc(agent(x.agent).name)}${x.final?' 정리':x.round?' '+x.round+'R':''}<button data-deq="${x.agent}" title="대기열에서 빼기">${I.x.replace(/18/g,'12')}</button></span>`).join(' ') + (qi.length>5?` <span style="color:var(--text3)">외 ${qi.length-5}</span>`:'');
     busy.innerHTML = `<span class="spin"></span><span><b style="color:${a.color}">${esc(a.name)}</b> 작업 중</span>${q?`<span style="color:var(--text3)">· 다음</span>${q}`:''}`;
     busy.querySelectorAll('[data-deq]').forEach(b => b.onclick = () => api(`/api/rooms/${r.id}/dequeue`, { method:'POST', body:JSON.stringify({ agent:b.dataset.deq }) }).catch(e=>toast(e.message)));
     act.innerHTML = `<button class="stop" id="stopBtn">${I.stop}중지</button>`;
@@ -762,6 +832,7 @@ function mentionsIn(text){
 }
 function updateTarget(){
   const el = $('#target'), r = curRoom(); if (!el || !r) return;
+  if (S.debate){ const d = S.debate; el.innerHTML = `<span>💬 토론: <b>${d.participants.map(id=>esc(agent(id).name)).join(' → ')}</b> × ${d.rounds}라운드${d.summarizer?` · 정리 <b>${esc(agent(d.summarizer).name)}</b>`:''}</span>`; return; }
   const text = $('#inp')?.value || ''; const ms = mentionsIn(text); const on = onAgents().map(a=>a.id);
   let who = ms.includes('all') ? on : ms.filter(x => on.includes(x));
   if (!ms.length){ const pick = [r.lastAgent, r.defaultAgent, ...on].find(x => x && on.includes(x)); who = pick ? [pick] : []; }
@@ -805,7 +876,8 @@ async function sendMsg(){
   const atts = S.pending.map(u=>u.id);
   t.value=''; autosize(); store.set('ar_draft_'+r.id,''); S.pending=[]; renderPending();
   S.stick = true;
-  try { await api('/api/rooms/'+r.id+'/messages', { method:'POST', body:JSON.stringify({ text, attachments:atts }) }); }
+  const debate = S.debate; S.debate = null; if (debate) renderComposer();
+  try { await api('/api/rooms/'+r.id+'/messages', { method:'POST', body:JSON.stringify({ text, attachments:atts, debate }) }); }
   catch(e){ toast(e.message); t.value=text; autosize(); }
 }
 
@@ -1130,7 +1202,7 @@ function connect(){
       const sig = (r) => r ? Object.entries(r.agents||{}).filter(([,v])=>v.enabled).map(([k])=>k).join() : '';
       const before = sig(S.rooms.find(x=>x.id===ev.room.id));
       upsertRoom(ev.room); renderSide();
-      if (ev.room.id === S.current){ renderTop(); if (before !== sig(ev.room)) renderComposer(); else { updateBusy(); updateTarget(); } renderPanel(); }
+      if (ev.room.id === S.current){ renderTop(); renderMemo(); if (before !== sig(ev.room)) renderComposer(); else { updateBusy(); updateTarget(); } renderPanel(); }
     } else if (ev.type === 'usage'){
       S.usage = ev.usage; renderPanel();
     } else if (ev.type === 'restarting'){

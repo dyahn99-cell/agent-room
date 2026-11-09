@@ -15,7 +15,7 @@ const ROOMS_DIR = path.join(DATA, 'rooms');
 const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS]) fs.mkdirSync(d, { recursive: true });
 
@@ -269,7 +269,9 @@ function roomSummary(r) {
     defaultAgent: r.defaultAgent, updatedAt: r.updatedAt,
     agents: Object.fromEntries(AGENT_IDS.map((a) => [a, ac(r, a)])),
     queue: runtime(r.id).queue.map((q) => q.agent),
+    queueInfo: runtime(r.id).queue.map((q) => ({ agent: q.agent, round: q.debate ? q.debate.round : null, final: !!(q.debate && q.debate.final) })),
     lastAgent: r.lastAgent || null,
+    memo: r.memo || '',
     busy: runtime(r.id).current ? runtime(r.id).current.agent : null,
     preview: last ? clip(last.text.replace(/\s+/g, ' '), 80) : '',
   };
@@ -376,7 +378,17 @@ async function revertTo(room, sha, cwd) {
 }
 
 // ---------- 멘션 ----------
-function parseMentions(text) {
+function stripQuoted(text) {
+  return String(text || '').replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ').split('\n').filter((l) => !/^\s*>/.test(l)).join('\n');
+}
+// AI 답에서 '다음: @이름' 줄만 지명으로 봄 (본문에서 이름만 말한 건 호출 안 함)
+function nextMentions(text) {
+  const lines = stripQuoted(text).split('\n').reverse();
+  const l = lines.find((x) => /^\s*(\*\*)?\s*(다음|next)\s*(\*\*)?\s*[:：]/i.test(x));
+  return l ? parseMentions(l, true) : [];
+}
+function parseMentions(text, raw) {
+  if (!raw) text = stripQuoted(text);
   const found = [];
   const re = /@([^\s@,.!?:;()\[\]"'`]+)/g;
   let m;
@@ -387,6 +399,26 @@ function parseMentions(text) {
     }
   }
   return found;
+}
+
+// ---------- 위험 명령 차단 (세 AI 공통) ----------
+const DEFAULT_BLOCK = ['git push', 'git reset --hard', 'git clean', 'rm -rf', 'rm -fr', 'sudo', 'npm publish', 'pnpm publish', 'yarn publish', 'mkfs', 'dd', 'shutdown', 'reboot'];
+const blockList = () => (Array.isArray(config.blockCommands) ? config.blockCommands : DEFAULT_BLOCK).filter((c) => typeof c === 'string' && c.trim());
+function claudeDisallowed() { return blockList().map((c) => `Bash(${c}:*)`); }
+function opencodePermission() {
+  const bash = { '*': 'allow' };
+  for (const c of blockList()) { bash[c] = 'deny'; bash[c + ' *'] = 'deny'; }
+  return JSON.stringify({ bash });
+}
+// 코덱스는 규칙 파일(~/.codex/rules)로 막음
+function writeCodexRules() {
+  try {
+    const dir = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'rules');
+    fs.mkdirSync(dir, { recursive: true });
+    const body = '# Agent Room이 자동으로 만든 파일이에요. 수정은 config.json의 blockCommands로 하세요.\n' +
+      blockList().map((c) => `prefix_rule(pattern=${JSON.stringify(c.trim().split(/\s+/))}, decision="forbidden")`).join('\n') + '\n';
+    fs.writeFileSync(path.join(dir, 'agent-room.rules'), body);
+  } catch (e) { console.error('코덱스 차단 규칙 쓰기 실패', e.message); }
 }
 
 // ---------- 방별 AI 설정 ----------
@@ -428,7 +460,8 @@ function preamble(room, agentId) {
     '규칙:',
     '- 한국어로, 단톡방 말투로 짧고 분명하게 답해. 마지막에 쓴 답이 방에 그대로 올라가.',
     '- 파일 수정은 "작성 권한"이 있는 AI만 해. 권한이 없으면 읽기·검토·의견만 내.',
-    `- 다른 AI에게 일을 넘기거나 의견을 물을 땐 답 안에 @이름(${others})을 써. 그러면 그 AI가 이어서 답해. 꼭 필요할 때만 불러.`,
+    `- 다른 AI에게 일을 넘기거나 의견을 물을 땐 답 맨 끝에 "다음: @이름" 한 줄을 써(${others}). 그 줄이 있을 때만 그 AI가 이어서 답해. 본문에서 이름을 말하는 건 호출이 아니야. 꼭 필요할 때만 넘겨.`,
+    `- 이런 명령은 실행하지 마: ${blockList().join(', ')}. 필요하면 사용자에게 직접 하라고 말해.`,
     '- 막히거나 애매하면 먼저 다른 AI에게 물어봐. 사용자에게는 결정이 꼭 필요할 때만 물어봐.',
     '- 대화 기록에서 [이름] 표시는 누가 말했는지 알려주는 거야. 네 답에는 붙이지 마.',
   ].join('\n');
@@ -448,6 +481,8 @@ function buildPrompt(room, agentId, attachments) {
   }
   const writer = room.writer === agentId;
   lines.push('', `[시스템] 현재 작성 권한: ${writer ? '너에게 있음 (파일 수정 가능)' : (room.writer ? config.agents[room.writer].name + '에게 있음 — 너는 수정 금지, 검토·의견만' : '아무도 없음 — 파일 수정 금지')}.`);
+  if (room.memo && room.memo.trim()) lines.push(`[방 메모 — 꼭 지킬 것] ${clip(room.memo.trim(), 2000)}`);
+  if (room._debateNote) lines.push(room._debateNote);
   const role = ROLES[ac(room, agentId).role];
   if (role) lines.push(`[시스템] 네 역할: ${role.text}`);
   lines.push(`[시스템] 위 대화를 보고 ${config.agents[agentId].name}(으)로서 이어서 답해. 앞의 AI가 이미 한 말은 반복하지 말고 보태거나 반박할 것만 말해.`);
@@ -473,6 +508,7 @@ const adapters = {
       if (st.session) args.push('--resume', st.session);
       if (c.model) args.push('--model', c.model);
       if (c.effort) args.push('--effort', c.effort);
+      if (blockList().length) args.push('--disallowedTools', ...claudeDisallowed());
       return { args, stdin: prompt.text };
     },
     handle(ev, ctx) {
@@ -562,7 +598,7 @@ const adapters = {
       if (c.effort) args.push('--variant', c.effort);
       if (st.session) args.push('--session', st.session);
       args.push(prompt.text.replace(/^-+/, ''));
-      return { args };
+      return { args, env: { OPENCODE_PERMISSION: opencodePermission() } };
     },
     handle(ev, ctx) {
       if (ev.sessionID) ctx.session(ev.sessionID);
@@ -605,11 +641,11 @@ function systemMsg(room, text) {
   return m;
 }
 
-function enqueue(room, agentId, depth, attachments = []) {
+function enqueue(room, agentId, depth, attachments = [], debate = null) {
   const rt = runtime(room.id);
   if (!config.agents[agentId]) return;
-  if (rt.queue.some((q) => q.agent === agentId)) return;
-  rt.queue.push({ agent: agentId, depth, attachments });
+  if (!debate && rt.queue.some((q) => q.agent === agentId && !q.debate)) return;
+  rt.queue.push({ agent: agentId, depth, attachments, debate });
   pushRoom(room);
   pump(room);
 }
@@ -638,7 +674,8 @@ async function runAgent(room, job, cur) {
   const st = room.agentState[agentId] || (room.agentState[agentId] = {});
   const writer = room.writer === agentId;
 
-  const msg = { id: uid(), role: 'agent', agent: agentId, text: '', status: 'running', ts: now(), steps: [], writer };
+  const msg = { id: uid(), role: 'agent', agent: agentId, text: '', status: 'running', ts: now(), startedAt: now(), lastOutAt: null, activity: '준비 중', steps: [], writer };
+  if (job.debate) msg.debate = { round: job.debate.round, total: job.debate.total, final: !!job.debate.final };
   room.messages.push(msg);
   pushMessage(room, msg, true);
 
@@ -676,19 +713,26 @@ async function runAgent(room, job, cur) {
     msg.status = 'stopped'; msg.text = '(중지됨)'; pushMessage(room, msg, true); return;
   }
 
+  room._debateNote = job.debate ? (job.debate.final
+    ? `[시스템] 토론 정리 담당이야. 지금까지 토론을 보고 ① 합의한 점 ② 남은 쟁점 ③ 결론·다음 할 일을 짧게 정리해. "다음:" 줄은 쓰지 마.`
+    : job.debate.first
+      ? `[시스템] 토론 ${job.debate.round}/${job.debate.total}라운드, 네가 첫 발언자야. 주제에 대한 네 입장을 근거와 함께 먼저 제시해. 결론 내지 말고 "다음:" 줄도 쓰지 마.`
+      : `[시스템] 토론 ${job.debate.round}/${job.debate.total}라운드야. 앞사람 의견에 동의할 건 짧게 인정하고, 반박하거나 보탤 것 위주로 네 입장을 말해. 결론 내지 말고 "다음:" 줄도 쓰지 마.`) : null;
   const prompt = buildPrompt(room, agentId, job.attachments || []);
-  const { args, stdin } = adapters[agentId].build(room, prompt, st, writer);
+  room._debateNote = null;
+  const { args, stdin, env: extraEnv } = adapters[agentId].build(room, prompt, st, writer);
 
   const texts = [];
   let finalText = null, errorText = null;
   const ctx = {
     session: (s) => { if (s && st.session !== s) { st.session = s; saveRoom(room); } },
     text: (t) => { texts.push(t); msg.text = texts.join('\n\n'); msg.live = ''; pushMessage(room, msg); },
-    live: (d) => { msg.live = (msg.live || '') + d; pushMessage(room, msg); },
+    live: (d) => { msg.live = (msg.live || '') + d; msg.activity = '답 쓰는 중'; pushMessage(room, msg); },
     final: (t) => { finalText = t; },
     think: (t) => { msg.thinking = clip(t, 400); pushMessage(room, msg); },
     step: (s) => {
       if (s.title) s.title = s.title.split(room.cwd.replace(/\/$/, '') + '/').join('');
+      msg.activity = s.title || msg.activity;
       const ex = msg.steps.find((x) => x.id === s.id);
       if (ex) Object.assign(ex, { title: s.title || ex.title });
       else { msg.steps.push({ ...s, ts: now() }); if (msg.steps.length > 200) msg.steps.shift(); }
@@ -702,7 +746,7 @@ async function runAgent(room, job, cur) {
     error: (e) => { errorText = typeof e === 'string' ? e : JSON.stringify(e); },
   };
 
-  const env = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', TERM: 'dumb' };
+  const env = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', TERM: 'dumb', ...(extraEnv || {}) };
   const proc = spawn(a.command, args, { cwd: room.cwd, env, detached: true, stdio: [stdin != null ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
   cur.proc = proc;
   trackPid(proc.pid, true);
@@ -717,8 +761,11 @@ async function runAgent(room, job, cur) {
       try { process.kill(-proc.pid, 'SIGTERM'); } catch { try { proc.kill('SIGTERM'); } catch { } }
     }
   }, 5000);
+  msg.activity = '생각 중';
+  let lastPush = 0;
   proc.stdout.on('data', (d) => {
-    lastOut = now();
+    lastOut = now(); msg.lastOutAt = lastOut;
+    if (lastOut - lastPush > 5000) { lastPush = lastOut; pushMessage(room, msg); }
     buf += d.toString('utf8');
     let i;
     while ((i = buf.indexOf('\n')) >= 0) {
@@ -743,6 +790,7 @@ async function runAgent(room, job, cur) {
   if (finalText && finalText.trim()) msg.text = finalText.trim();
   delete msg.thinking;
   delete msg.live;
+  delete msg.activity;
 
   if (cur.stopped) {
     msg.status = 'stopped';
@@ -769,7 +817,7 @@ async function runAgent(room, job, cur) {
 
   // 다른 AI 호출 (자동 턴)
   if (msg.status === 'done') {
-    const targets = parseMentions(msg.text).filter((t) => t !== 'all' && t !== agentId && ac(room, t).enabled);
+    const targets = job.debate ? [] : nextMentions(msg.text).filter((t) => t !== 'all' && t !== agentId && ac(room, t).enabled);
     if (targets.length) {
       if (job.depth + 1 > room.autoTurns) {
         systemMsg(room, `AI끼리 자동으로 ${room.autoTurns}번 주고받아서 멈췄어요. 이어가려면 직접 불러주세요.`);
@@ -820,7 +868,7 @@ function stopRoom(room) {
 }
 
 // ---------- 사용자 메시지 ----------
-function postUser(room, text, attachIds) {
+function postUser(room, text, attachIds, debate) {
   const attachments = (attachIds || []).map((id) => (room.uploads || []).find((u) => u.id === id)).filter(Boolean);
   const m = { id: uid(), role: 'user', text, ts: now(), attachments };
   room.messages.push(m);
@@ -834,6 +882,19 @@ function postUser(room, text, attachIds) {
   if (!targets.length && !parseMentions(text).length) {
     const pick = [room.lastAgent, room.defaultAgent, ...on].find((a) => a && on.includes(a));
     if (pick) targets = [pick];
+  }
+  if (debate && Array.isArray(debate.participants)) {
+    const parts = debate.participants.filter((t) => on.includes(t) && availability[t]);
+    const rounds = Math.max(1, Math.min(4, +debate.rounds || 2));
+    const sum = on.includes(debate.summarizer) ? debate.summarizer : null;
+    if (parts.length >= 2) {
+      m.debate = { participants: parts, rounds, summarizer: sum }; pushMessage(room, m, true);
+      for (let r = 1; r <= rounds; r++) parts.forEach((t, i) => enqueue(room, t, 0, r === 1 ? attachments : [], { round: r, total: rounds, first: r === 1 && i === 0 }));
+      if (sum) enqueue(room, sum, 0, [], { final: true, round: rounds, total: rounds });
+      room.lastAgent = sum || parts[parts.length - 1];
+      pushRoom(room); return;
+    }
+    systemMsg(room, '토론은 참여 중인 AI가 2명 이상 있어야 해요.');
   }
   room.lastAgent = targets[targets.length - 1];
   for (const t of orderAgents(room, targets)) enqueue(room, t, 0, attachments);
@@ -987,6 +1048,10 @@ const server = http.createServer(async (req, res) => {
           }
         }
         if (Number.isInteger(b.autoTurns) && b.autoTurns >= 0 && b.autoTurns <= 10) room.autoTurns = b.autoTurns;
+        if (typeof b.memo === 'string' && b.memo !== (room.memo || '')) {
+          room.memo = b.memo.slice(0, 2000);
+          const sm = systemMsg(room, room.memo.trim() ? '방 메모를 고정했어요. 매번 AI에게 같이 전달돼요.' : '방 메모를 지웠어요.'); sm.forAgents = false;
+        }
         if (b.defaultAgent && config.agents[b.defaultAgent]) room.defaultAgent = b.defaultAgent;
         if (b.agents && typeof b.agents === 'object') {
           room.agents = room.agents || {};
@@ -1025,7 +1090,7 @@ const server = http.createServer(async (req, res) => {
         const b = await readJSON(req);
         const text = String(b.text || '').trim();
         if (!text && !(b.attachments || []).length) return send(res, 400, { error: '내용이 없어요' });
-        postUser(room, text || '(첨부 파일)', b.attachments);
+        postUser(room, text || '(첨부 파일)', b.attachments, b.debate || null);
         return send(res, 200, { ok: true });
       }
       if (sub === '/stop' && req.method === 'POST') { stopRoom(room); return send(res, 200, { ok: true }); }
@@ -1124,6 +1189,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 reapOrphans();
+writeCodexRules();
 loadRooms();
 checkAgents().then(() => {
   checkHealth(true).catch(() => { });
