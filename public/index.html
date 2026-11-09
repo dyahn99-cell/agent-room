@@ -225,6 +225,24 @@ textarea.inp::placeholder{color:var(--text3)}
 .conn{position:fixed;top:10px;left:50%;transform:translateX(-50%);background:var(--err);color:#fff;font-size:12.5px;padding:5px 12px;border-radius:999px;z-index:40;display:none}
 .conn.show{display:block}
 
+/* 0.7 */
+.mcard{margin:8px 12px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:14px}
+.mcard.ok{border-color:color-mix(in srgb,var(--ok) 45%,var(--line));background:color-mix(in srgb,var(--ok) 4%,var(--surface))}
+.mcard .tx{line-height:1.5}
+.mcard .ft{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11.5px;color:var(--text3);flex-wrap:wrap}
+.mcard .ft .linkbtn{font-size:12px}
+.badge{font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:999px}
+.badge.ok{background:#DCEFE2;color:#2C7A4B}.badge.ai{background:var(--raised);color:var(--text2)}
+.brief{max-width:780px;margin:12px auto 0;padding:12px 16px;border-radius:14px;background:color-mix(in srgb,var(--accent) 7%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));font-size:14px}
+.brief b{font-family:var(--serif)}
+.brief ul{margin:6px 0 0;padding-left:18px}
+.cmds{position:absolute;bottom:calc(100% + 6px);left:10px;right:10px;max-width:460px;background:var(--surface);border:1px solid var(--line2);border-radius:14px;box-shadow:var(--shadow);padding:5px;display:none;z-index:6;max-height:320px;overflow-y:auto}
+.cmds.show{display:block}
+.cmds button{display:flex;width:100%;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;text-align:left;font-size:14px}
+.cmds button.sel,.cmds button:hover{background:var(--raised)}
+.cmds code{font-family:var(--mono);font-size:13px;color:var(--accent);min-width:84px}
+.cmds small{color:var(--text3);font-size:12.5px}
+
 /* 0.6 기억 */
 .memdoc{margin:8px 12px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 14px;font-size:14px}
 .memdoc .md ul{margin:0;padding-left:1.2em}
@@ -248,7 +266,7 @@ textarea.inp::placeholder{color:var(--text3)}
 /* 0.4 멤버 패널 */
 .panel{width:310px;flex:none;border-left:1px solid var(--line);background:var(--side);display:flex;flex-direction:column;min-height:0}
 .ptabs{display:flex;gap:4px;padding:10px 12px 4px;flex:none}
-.ptabs button{flex:1;height:34px;border-radius:9px;font-size:13.5px;color:var(--text2);font-weight:600}
+.ptabs button{flex:1;height:34px;border-radius:9px;font-size:13px;white-space:nowrap;padding:0 4px;color:var(--text2);font-weight:600}
 .ptabs button.on{background:var(--surface);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.07)}
 .pbody{flex:1;overflow-y:auto;padding:2px 0 14px}
 .mem{background:var(--surface);border:1px solid var(--line);border-radius:14px;margin:8px 12px;padding:12px;cursor:pointer;transition:border-color .2s,box-shadow .2s}
@@ -548,6 +566,37 @@ function renderTop(){
   $('#folderChip').onclick = () => openSettings();
 }
 
+// ---------- 다시 왔을 때 브리핑 ----------
+function markSeen(){ if (S.current && document.visibilityState === 'visible') store.set('ar_seen_'+S.current, String(Date.now())); }
+setInterval(markSeen, 20000);
+document.addEventListener('visibilitychange', () => { if (document.hidden) markSeen(); else if (S.current) showBriefing(S.current); });
+function showBriefing(id){
+  const seen = +store.get('ar_seen_'+id) || 0; markSeen();
+  if (!seen || Date.now() - seen < 30*60000) return;
+  const fresh = S.messages.filter(m => (m.doneAt || m.ts) > seen && m.role !== 'user');
+  const agents = fresh.filter(m => m.role === 'agent' && m.status !== 'running');
+  if (!agents.length) return;
+  const files = agents.reduce((n,m)=>n+((m.changes||[]).length),0);
+  const pending = agents.filter(m => (m.changes||[]).length && !m.review).length;
+  const fails = agents.filter(m => m.status === 'error').length;
+  const mem = agents.filter(m => m.memoryUpdate).reduce((a,m)=>({add:a.add+m.memoryUpdate.added, rem:a.rem+m.memoryUpdate.removed}),{add:0,rem:0});
+  const who = [...new Set(agents.map(m=>agent(m.agent).name))].join(', ');
+  const last = agents[agents.length-1];
+  const away = Date.now() - seen; const h = Math.floor(away/3600000);
+  const lines = [
+    `${who}${(()=>{ const c=who.charCodeAt(who.length-1); return c>=0xac00&&c<=0xd7a3&&(c-0xac00)%28 ? '이' : '가'; })()} ${agents.length}번 답했어요${files?` · 파일 ${files}개 변경${pending?`, <b>승인 대기 ${pending}건</b>`:''}`:''}${fails?` · 실패 ${fails}건`:''}`,
+    mem.add||mem.rem ? `방 기억이 바뀌었어요 (+${mem.add} −${mem.rem})` : null,
+    `마지막: <b style="color:${agent(last.agent).color}">${esc(agent(last.agent).name)}</b> — ${esc((last.errorHint || last.text || '').replace(/\s+/g,' ').slice(0,90))}`,
+  ].filter(Boolean).slice(0,3);
+  const box = document.createElement('div');
+  box.className = 'brief'; box.id = 'brief';
+  box.innerHTML = `<div style="display:flex;align-items:center;gap:8px"><b>자리 비운 동안 (${h ? h+'시간' : Math.floor(away/60000)+'분'})</b><span class="spacer"></span>${mem.add||mem.rem?'<button class="linkbtn" id="briefMem">기억 보기</button>':''}<button class="iconbtn" style="width:28px;height:28px" id="briefX">${I.x}</button></div><ul>${lines.map(l=>`<li>${l}</li>`).join('')}</ul>`;
+  $('#brief')?.remove();
+  const th = $('#thread'); th.parentNode.insertBefore(box, th);
+  $('#briefX').onclick = () => box.remove();
+  if ($('#briefMem')) $('#briefMem').onclick = () => openPanel('memory');
+}
+
 // ---------- 방 메모 ----------
 function renderMemo(){
   const w = $('#memoWrap'), r = curRoom(); if (!w) return;
@@ -629,11 +678,12 @@ function memberCard(r, a){
   const pills = [ra.role ? `<span class="pill role">${ROLE_NAME[ra.role]}</span>` : '',
     u.tokensToday && u.day === new Date().toLocaleDateString('sv-SE') ? `<span class="pill">오늘 ${fmtTok(u.tokensToday)} 토큰</span>` : '',
     h && h.ok === false ? `<span class="pill" style="color:var(--err)">${esc(h.text)}</span>` : '',
-    h && /샌드박스 꺼짐/.test(h.text||'') ? '<span class="pill">샌드박스 꺼짐 · 되돌리기 보호</span>' : ''].join('');
+    h && h.sandbox === false ? `<span class="pill">${ra.noSandbox ? '샌드박스 없이 · 스냅샷 보호' : '샌드박스 안 됨 · 실행 막힘'}</span>` : ''].join('');
   const noBars = !(u.windows||[]).length ? `<div class="ubar"><div class="l"><span>${a.id==='opencode' ? '무료 모델 · 한도 없음' : '한도 정보는 첫 답변 뒤에 보여요'}</span></div></div>` : '';
   return `<div class="mem ${sc==='s-work'?'work':''} ${ra.enabled?'':'off'}" data-mem="${a.id}">
     <div class="mh">${avatar(a.id)}<div style="min-width:0"><b>${esc(a.name)}</b><div class="sub">${esc(mname)}${ra.effort?' · '+esc(ra.effort):''}</div></div><span class="state ${sc}">${st}</span></div>
     ${pills.trim() ? `<div class="meta">${pills}</div>` : ''}${bars || noBars}
+    ${h && h.sandbox === false ? `<div class="wr"><span>샌드박스 없이 허용<br><small style="color:var(--text3)">이 기기에선 격리가 안 돼요. 켜면 스냅샷 보호로 실행</small></span><button class="switch ${ra.noSandbox?'on':''}" data-nosb="${a.id}"></button></div>` : ''}
     <div class="wr"><span>작성 권한</span><button class="switch ${r.writer===a.id?'on':''}" data-wr="${a.id}" ${ra.enabled?'':'disabled'} title="이 AI만 파일을 고칠 수 있어요"></button></div>
   </div>`;
 }
@@ -643,28 +693,63 @@ function renderPanel(){
   if (!r){ el.innerHTML = `<div style="padding:24px 16px;color:var(--text3);font-size:13px">방을 고르면 멤버가 보여요</div>`; return; }
   const sets = S.messages.filter(m => m.role==='agent' && m.changes && m.changes.length);
   const memN = (r.memory||'').split('\n').filter(x=>x.trim()).length;
-  el.innerHTML = `<div class="ptabs"><button data-tab="members" class="${S.panelTab==='members'?'on':''}">멤버</button><button data-tab="memory" class="${S.panelTab==='memory'?'on':''}">기억${memN?' '+memN:''}</button><button data-tab="results" class="${S.panelTab==='results'?'on':''}">결과물${sets.length?' '+sets.length:''}</button></div>
-    <div class="pbody">${S.panelTab==='members' ? S.agents.map(a => memberCard(r, a)).join('') + `<div style="padding:4px 16px;font-size:12px;color:var(--text3)">카드를 누르면 모델·역할을 바꿀 수 있어요</div>` : S.panelTab==='memory' ? memoryHTML(r) : resultsHTML(r)}</div>`;
+  el.innerHTML = `<div class="ptabs"><button data-tab="members" class="${S.panelTab==='members'?'on':''}">멤버</button><button data-tab="memory" class="${S.panelTab==='memory'?'on':''}">기억${memN?' '+memN:''}</button><button data-tab="ideas" class="${S.panelTab==='ideas'?'on':''}">아이디어${(r.ideas||[]).length?' '+r.ideas.length:''}</button><button data-tab="results" class="${S.panelTab==='results'?'on':''}">결과물${sets.length?' '+sets.length:''}</button></div>
+    <div class="pbody">${S.panelTab==='members' ? S.agents.map(a => memberCard(r, a)).join('') + `<div style="padding:4px 16px;font-size:12px;color:var(--text3)">카드를 누르면 모델·역할을 바꿀 수 있어요</div>` : S.panelTab==='memory' ? memoryHTML(r) : S.panelTab==='ideas' ? ideasHTML(r) : resultsHTML(r)}</div>`;
   el.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { S.panelTab = b.dataset.tab; renderPanel(); });
-  el.querySelectorAll('[data-mem]').forEach(c => c.onclick = (e) => { if (e.target.closest('[data-wr]')) return; openAgents(); });
+  el.querySelectorAll('[data-mem]').forEach(c => c.onclick = (e) => { if (e.target.closest('[data-wr],[data-nosb]')) return; openAgents(); });
+  el.querySelectorAll('[data-nosb]').forEach(b => b.onclick = async (e) => {
+    e.stopPropagation(); const id = b.dataset.nosb;
+    try { upsertRoom(await api('/api/rooms/'+r.id, { method:'PATCH', body:JSON.stringify({ agents:{ [id]:{ noSandbox: !roomAgent(id).noSandbox } } }) })); renderPanel(); } catch(err){ toast(err.message); }
+  });
   el.querySelectorAll('[data-wr]').forEach(b => b.onclick = async (e) => {
     e.stopPropagation(); const id = b.dataset.wr;
     try { await api('/api/rooms/'+r.id, { method:'PATCH', body:JSON.stringify({ writer: r.writer===id ? null : id }) }); } catch(err){ toast(err.message); }
   });
   if (S.panelTab === 'results') bindResults(el);
   if (S.panelTab === 'memory') bindMemory(el, r);
+  if (S.panelTab === 'ideas') bindIdeas(el, r);
 }
 function memoryHTML(r){
   const nm = r.memoryBy && r.memoryBy!=='user' ? agent(r.memoryBy).name : '';
   const by = r.memoryBy ? (r.memoryBy==='user' ? '내가' : esc(nm) + (((nm.charCodeAt(nm.length-1)-0xac00)%28) > 0 ? '이' : '가')) : '';
   const hist = (r.memoryHistory||[]).slice().reverse();
   return `<div class="memhd"><span>AI들이 합의하면서 스스로 정리해 가요. 매번 모든 AI에게 전달돼요.</span></div>
-    <div class="memdoc">${(r.memory||'').trim() ? `<div class="md">${md(r.memory)}</div>` : '<div style="color:var(--text3);font-size:13px">아직 합의한 내용이 없어요. 토론하거나 같이 정하면 여기에 쌓여요.</div>'}</div>
+    ${(r.memory||'').trim() ? String(r.memory).split('\n').filter(l=>l.trim()).map(l => { const k=l.trim(); const mt=(r.memoryMeta||{})[k]||{}; const who = mt.by ? (mt.by==='user'?'나':esc(agent(mt.by).name)) : '';
+      return `<div class="mcard ${mt.approved?'ok':''}"><div class="tx">${esc(k.replace(/^-\s*/,''))}</div><div class="ft">${mt.approved?'<span class="badge ok">확정</span>':'<span class="badge ai">AI 정리</span>'}${who?`<span>${who}${mt.at?' · '+fmtTime(mt.at):''}</span>`:''}<span class="spacer"></span>${mt.msgId?`<button class="linkbtn muted" data-why="${mt.msgId}">왜?</button>`:''}<button class="linkbtn" data-ml="${esc(k)}" data-act="${mt.approved?'unapprove':'approve'}">${mt.approved?'확정 취소':'확정'}</button><button class="linkbtn muted" data-ml="${esc(k)}" data-act="remove">빼기</button></div></div>`; }).join('')
+      : '<div class="memdoc"><div style="color:var(--text3);font-size:13px">아직 합의한 내용이 없어요. 토론하거나 같이 정하면 여기에 쌓여요.</div></div>'}
     ${r.memoryAt ? `<div class="memhd"><span>마지막 정리: ${by} ${fmtTime(r.memoryAt)}</span></div>` : ''}
     <div style="display:flex;gap:6px;margin:8px 12px"><button class="btn sm" id="memEdit">직접 고치기</button><button class="btn sm" id="memExport" ${(r.memory||'').trim()?'':'disabled'}>DECISIONS.md로 내보내기</button></div>
     ${hist.length ? `<div class="rsec" style="margin:14px 14px 4px">이전 버전</div><div class="hist">${hist.map(h=>`<div><span>${fmtTime(h.at)}</span><span style="color:var(--text3)">${h.by?(h.by==='user'?'나':esc(agent(h.by).name)):'처음'} · ${h.lines}줄</span><span class="spacer"></span><button class="linkbtn muted" data-restore="${h.i}">이 버전으로</button></div>`).join('')}</div>` : ''}`;
 }
+function ideasHTML(r){
+  const list = (r.ideas||[]).slice().reverse();
+  return `<div class="memhd"><span>"나중에 해보자"는 것들이 모여요. AI가 "아이디어:"로 남기거나, 메시지의 💡 버튼으로 보관해요.</span></div>
+    <div style="display:flex;gap:6px;margin:8px 12px"><input id="ideaIn" placeholder="아이디어 직접 적기" style="flex:1;min-width:0;height:36px;border:1px solid var(--line2);border-radius:9px;background:var(--surface);padding:0 10px;outline:0;font-size:14px"><button class="btn sm primary" id="ideaAdd">보관</button></div>
+    ${list.length ? list.map(i => `<div class="mcard"><div class="tx">${esc(i.text)}</div><div class="ft"><span>${i.by==='user'?'나':esc(agent(i.by).name)} · ${fmtTime(i.at)}</span><span class="spacer"></span>${i.msgId?`<button class="linkbtn muted" data-why="${i.msgId}">출처</button>`:''}<button class="linkbtn" data-promote="${i.id}">기억으로 확정</button><button class="linkbtn muted" data-idel="${i.id}">지우기</button></div></div>`).join('') : '<div class="memdoc"><div style="color:var(--text3);font-size:13px">아직 보관한 아이디어가 없어요.</div></div>'}`;
+}
+function bindIdeas(el, r){
+  const add = async () => { const v = $('#ideaIn').value.trim(); if (!v) return; try { upsertRoom(await api(`/api/rooms/${r.id}/ideas`, { method:'POST', body:JSON.stringify({ text:v }) })); renderPanel(); } catch(e){ toast(e.message); } };
+  $('#ideaAdd').onclick = add; $('#ideaIn').onkeydown = (e) => { if (e.key==='Enter' && !e.isComposing){ e.preventDefault(); add(); } };
+  el.querySelectorAll('[data-why]').forEach(b => b.onclick = () => showWhy(b.dataset.why));
+  el.querySelectorAll('[data-promote]').forEach(b => b.onclick = async () => { try { upsertRoom(await api(`/api/rooms/${r.id}/ideas`, { method:'POST', body:JSON.stringify({ promote:b.dataset.promote }) })); renderPanel(); toast('기억으로 확정했어요'); } catch(e){ toast(e.message); } });
+  el.querySelectorAll('[data-idel]').forEach(b => b.onclick = async () => { try { upsertRoom(await api(`/api/rooms/${r.id}/ideas`, { method:'POST', body:JSON.stringify({ remove:b.dataset.idel }) })); renderPanel(); } catch(e){ toast(e.message); } });
+}
+async function saveIdea(text, msgId){
+  try { upsertRoom(await api(`/api/rooms/${S.current}/ideas`, { method:'POST', body:JSON.stringify({ text, msgId }) })); renderPanel(); toast('아이디어 보관함에 넣었어요'); } catch(e){ toast(e.message); }
+}
+function showWhy(msgId){
+  const m = S.messages.find(x=>x.id===msgId);
+  if (!m){ toast('출처 메시지를 찾을 수 없어요'); return; }
+  const a = m.agent ? agent(m.agent) : null;
+  showModal(`<header><h2>왜 이렇게 정했을까</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
+    <div class="mbody"><div style="font-size:13px;color:var(--text3);margin-bottom:8px">${a?`<b style="color:${a.color}">${esc(a.name)}</b>`:'나'} · ${fmtTime(m.ts)}</div><div class="md">${md(m.text||'')}</div></div>
+    <footer><button class="btn" id="mGo">대화에서 보기</button><button class="btn primary" id="mCancel">닫기</button></footer>`);
+  $('#mClose').onclick = $('#mCancel').onclick = closeOverlays;
+  $('#mGo').onclick = () => { closeOverlays(); const n=document.getElementById('m-'+msgId); if (n){ n.scrollIntoView({behavior:'smooth',block:'center'}); n.style.transition='background .6s'; n.style.background='var(--accent-soft)'; setTimeout(()=>n.style.background='',1600); } };
+}
 function bindMemory(el, r){
+  el.querySelectorAll('[data-why]').forEach(b => b.onclick = () => showWhy(b.dataset.why));
+  el.querySelectorAll('[data-ml]').forEach(b => b.onclick = async () => { try { upsertRoom(await api(`/api/rooms/${r.id}/memline`, { method:'POST', body:JSON.stringify({ line:b.dataset.ml, action:b.dataset.act }) })); renderPanel(); } catch(e){ toast(e.message); } });
   $('#memEdit').onclick = () => {
     showModal(`<header><h2>방 기억 고치기</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
       <div class="mbody"><p style="margin:0 0 10px;color:var(--text2);font-size:13.5px">고친 내용은 AI들에게도 "사용자가 고쳤다"고 알려줘요. 각 줄은 "- "로 시작하면 깔끔해요.</p>
@@ -700,7 +785,7 @@ function renderMsg(m){
   const shown = hideMem(m.text || '') + (m.live ? (m.text ? '\n\n' : '') + hideMem(m.live) : '');
   if (m.status === 'error'){
     const clean = (m.text||'').replace(/\n*⚠️[\s\S]*$/,'').trim();
-    body = (clean?`<div class="md" style="margin-bottom:8px">${md(clean)}</div>`:'') + `<div class="errbox"><div class="row"><span>⚠️ ${esc(m.errorHint || '실패했어요')}</span><span class="spacer"></span><button class="btn sm" data-retry="${m.id}">${I.retry} 다시 시도</button></div>${m.errorDetail?`<details><summary>자세히</summary><pre>${esc(m.errorDetail)}</pre></details>`:''}</div>`;
+    body = (clean?`<div class="md" style="margin-bottom:8px">${md(clean)}</div>`:'') + `<div class="errbox"><div class="row"><span>⚠️ ${esc(m.errorHint || '실패했어요')}</span><span class="spacer"></span>${m.needsNoSandbox?`<button class="btn sm primary" data-allownosb="${m.id}">허용하고 다시 시도</button>`:''}<button class="btn sm" data-retry="${m.id}">${I.retry} 다시 시도</button></div>${m.errorDetail?`<details><summary>자세히</summary><pre>${esc(m.errorDetail)}</pre></details>`:''}</div>`;
   }
   else if (shown) body = `<div class="md">${md(shown)}</div>${running && m.live ? '<span class="caret"></span>' : ''}`;
   else if (running) body = (m.thinking?`<div class="thinking">${esc(m.thinking)}</div>`:'') + `<div class="typing"><i></i><i></i><i></i></div>`;
@@ -722,7 +807,7 @@ function renderMsg(m){
   }
   return `<div class="msg agent" id="m-${m.id}">
     <div class="who">${avatar(m.agent)}<span class="n" style="color:${a.color}">${esc(a.name)}</span>${m.writer?'<span class="tag">작성</span>':''}${ROLE_NAME[roomAgent(m.agent).role]&&running?`<span class="role">${ROLE_NAME[roomAgent(m.agent).role]}</span>`:''}<span class="time">${fmtTime(m.ts)}</span>${m.debate?`<span class="dbtag">${m.debate.final?'정리':'토론 '+m.debate.round+'/'+m.debate.total}</span>`:''}${running?`<span class="elapsed" data-start="${m.startedAt||m.ts}" data-last="${m.lastOutAt||''}" data-act="${esc(m.activity||'')}"></span>`:''}</div>
-    <div class="body">${stepsHtml}${body}${tail}${!running && m.status!=='error' && m.text ? `<div class="acts"><button data-copymsg="${m.id}">${I.copy} 복사</button></div>` : ''}</div></div>`;
+    <div class="body">${stepsHtml}${body}${tail}${!running && m.status!=='error' && m.text ? `<div class="acts"><button data-copymsg="${m.id}">${I.copy} 복사</button><button data-ideamsg="${m.id}">💡 보관</button></div>` : ''}</div></div>`;
 }
 
 function bindMsg(el){
@@ -734,8 +819,12 @@ function bindMsg(el){
   });
   el.querySelectorAll('[data-diff]').forEach(b => b.onclick = () => openDiff(b.dataset.diff));
   el.querySelectorAll('[data-revert]').forEach(b => b.onclick = () => confirmRevert(b.dataset.revert));
+  el.querySelectorAll('[data-ideamsg]').forEach(b => b.onclick = () => { const m=S.messages.find(x=>x.id===b.dataset.ideamsg); if (m) saveIdea(m.text.replace(/\s+/g,' ').slice(0,300), m.id); });
   el.querySelectorAll('[data-memopen]').forEach(b => b.onclick = () => openPanel('memory'));
   el.querySelectorAll('[data-undo]').forEach(b => b.onclick = () => { const m=S.messages.find(x=>x.id===b.dataset.undo); if (m) api(`/api/rooms/${S.current}/revert`, { method:'POST', body:JSON.stringify({ checkpoint:m.undoCheckpoint }) }).then(()=>toast('취소했어요')).catch(e=>toast(e.message)); });
+  el.querySelectorAll('[data-allownosb]').forEach(b => b.onclick = async () => {
+    try { upsertRoom(await api('/api/rooms/'+S.current, { method:'PATCH', body:JSON.stringify({ agents:{ codex:{ noSandbox:true } } }) })); await api(`/api/rooms/${S.current}/retry`, { method:'POST', body:JSON.stringify({ msgId:b.dataset.allownosb }) }); } catch(e){ toast(e.message); }
+  });
   el.querySelectorAll('[data-retry]').forEach(b => b.onclick = () => api(`/api/rooms/${S.current}/retry`, { method:'POST', body:JSON.stringify({ msgId:b.dataset.retry }) }).catch(e=>toast(e.message)));
   el.querySelectorAll('[data-approve]').forEach(b => b.onclick = () => api(`/api/rooms/${S.current}/review`, { method:'POST', body:JSON.stringify({ msgId:b.dataset.approve, verdict:'approve' }) }).then(()=>toast('승인했어요')).catch(e=>toast(e.message)));
   el.querySelectorAll('[data-reject]').forEach(b => b.onclick = () => openReject(b.dataset.reject));
@@ -806,10 +895,11 @@ function renderComposer(){
   const draft = $('#inp') ? $('#inp').value : (store.get('ar_draft_'+r.id) || '');
   wrap.innerHTML = `<div class="composer">
     <div class="mentions" id="mentions"></div>
+    <div class="cmds" id="cmds"></div>
     <div class="pending" id="pending"></div>
     <div class="target" id="target"></div>
     <div class="faces">${onAgents().map(a=>`<button data-m="${esc(a.name)}" data-id="${a.id}">${avatar(a.id)}${esc(a.name)}</button>`).join('')}<button class="all" data-m="전체" data-id="all">전체</button><button class="debate ${S.debate?'on':''}" id="debateBtn">💬 토론${S.debate?' 켜짐':''}</button></div>
-    <textarea class="inp" id="inp" rows="1" enterkeyhint="send" placeholder="메시지를 입력하세요 (줄바꿈은 Shift+Enter)"></textarea>
+    <textarea class="inp" id="inp" rows="1" enterkeyhint="send" placeholder="메시지 입력 · / 로 명령 · Shift+Enter 줄바꿈"></textarea>
     <div class="crow">
       <button class="iconbtn" id="attach" title="파일 첨부">${I.clip}</button>
       <input type="file" id="file" multiple hidden>
@@ -818,7 +908,7 @@ function renderComposer(){
       <span id="actBtn"></span>
     </div></div>`;
   const inp = $('#inp'); inp.value = draft; autosize();
-  inp.addEventListener('input', () => { autosize(); store.set('ar_draft_'+r.id, inp.value); updateSend(); mentionPopup(); updateTarget(); });
+  inp.addEventListener('input', () => { autosize(); store.set('ar_draft_'+r.id, inp.value); updateSend(); mentionPopup(); cmdPopup(); updateTarget(); });
   inp.addEventListener('keydown', onKey);
   inp.addEventListener('blur', () => setTimeout(()=>$('#mentions')?.classList.remove('show'),150));
   wrap.querySelectorAll('.faces button[data-m]').forEach(b => b.onclick = () => toggleMention(b.dataset.m));
@@ -909,7 +999,54 @@ function insertMention(key){
   t.focus(); t.setSelectionRange(t.value.length,t.value.length); autosize(); updateSend();
   store.set('ar_draft_'+S.current, t.value);
 }
+const COMMANDS = [
+  { c:'/토론', d:'토론 모드 설정', run:()=>openDebate() },
+  { c:'/메모', d:'방 메모 고정·수정', run:()=>openMemo() },
+  { c:'/기억', d:'방 기억 보기', run:()=>openPanel('memory') },
+  { c:'/아이디어', d:'뒤에 쓴 내용을 보관함에 넣기', arg:true, run:(t)=> t ? saveIdea(t) : openPanel('ideas') },
+  { c:'/보관함', d:'아이디어 보관함 열기', run:()=>openPanel('ideas') },
+  { c:'/결과물', d:'바뀐 파일·HTML 보기', run:()=>openPanel('results') },
+  { c:'/멤버', d:'AI 상태·한도·작성 권한', run:()=>openPanel('members') },
+  { c:'/설정', d:'모델·역할 바꾸기', run:()=>openAgents() },
+  { c:'/중지', d:'지금 작업 멈추기', run:()=>api(`/api/rooms/${S.current}/stop`,{method:'POST'}).then(()=>toast('중지했어요')) },
+  { c:'/내보내기', d:'방 기억을 DECISIONS.md로', run:()=>api(`/api/rooms/${S.current}/memexport`,{method:'POST'}).then(()=>toast('내보냈어요')).catch(e=>toast(e.message)) },
+  { c:'/새방', d:'새 방 만들기', run:()=>openNewRoom() },
+  { c:'/방설정', d:'방 이름·폴더·자동 턴', run:()=>openSettings() },
+  { c:'/업데이트', d:'새 버전 확인', run:()=>openUpdate() },
+];
+let cSel = 0;
+function cmdMatches(){
+  const v = ($('#inp')?.value || ''); if (!v.startsWith('/')) return null;
+  const head = v.split(/\s/)[0];
+  if (/\s/.test(v)){ const exact = COMMANDS.find(x => x.c === head); return exact && exact.arg ? [] : null; }
+  return COMMANDS.filter(x => x.c.startsWith(head));
+}
+function cmdPopup(){
+  const box = $('#cmds'); if (!box) return; const list = cmdMatches();
+  if (!list || !list.length){ box.classList.remove('show'); return; }
+  cSel = Math.min(cSel, list.length-1);
+  box.innerHTML = list.map((x,i)=>`<button data-c="${x.c}" class="${i===cSel?'sel':''}"><code>${x.c}</code><small>${esc(x.d)}</small></button>`).join('');
+  box.querySelectorAll('button').forEach(b => b.onmousedown = (e) => { e.preventDefault(); runCommand(b.dataset.c); });
+  box.classList.add('show');
+}
+function runCommand(c, rest){
+  const cmd = COMMANDS.find(x => x.c === c); if (!cmd) return false;
+  const t = $('#inp'); t.value = ''; autosize(); store.set('ar_draft_'+S.current,''); $('#cmds').classList.remove('show'); updateSend(); updateTarget();
+  cmd.run((rest||'').trim()); return true;
+}
 function onKey(e){
+  const cb = $('#cmds');
+  if (cb && cb.classList.contains('show')){
+    const n = cb.querySelectorAll('button').length;
+    if (e.key==='ArrowDown'){ e.preventDefault(); cSel=(cSel+1)%n; cmdPopup(); return; }
+    if (e.key==='ArrowUp'){ e.preventDefault(); cSel=(cSel-1+n)%n; cmdPopup(); return; }
+    if ((e.key==='Enter' || e.key==='Tab') && !e.isComposing){ e.preventDefault(); const b=cb.querySelectorAll('button')[cSel]; if (b) runCommand(b.dataset.c); return; }
+    if (e.key==='Escape'){ cb.classList.remove('show'); return; }
+  }
+  if (e.key==='Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229){
+    const v = $('#inp').value; const head = v.split(/\s/)[0];
+    if (v.startsWith('/') && COMMANDS.some(x=>x.c===head)){ e.preventDefault(); runCommand(head, v.slice(head.length)); return; }
+  }
   const box=$('#mentions');
   if (box.classList.contains('show')){
     const n = box.querySelectorAll('button').length;
@@ -925,6 +1062,7 @@ function onKey(e){
 async function sendMsg(){
   const t=$('#inp'); const r=curRoom(); if (!t || !r) return;
   const text=t.value.trim(); if (!text && !S.pending.length) return;
+  { const head = text.split(/\s/)[0]; if (text.startsWith('/') && COMMANDS.some(x=>x.c===head)){ runCommand(head, text.slice(head.length)); return; } }
   if (r.busy) return;
   askNotify();
   const atts = S.pending.map(u=>u.id);
@@ -951,12 +1089,13 @@ document.addEventListener('paste', (e) => {
 
 // ---------- 방 열기 ----------
 async function openRoom(id){
+  markSeen(); $('#brief')?.remove();
   S.current = id; store.set('ar_room', id); S.pending=[]; S.openSteps = new Set();
   renderSide(); renderTop(); renderComposer();
   $('#thread').innerHTML='';
   try { const d = await api('/api/rooms/'+id); S.messages = d.messages; upsertRoom(d); }
   catch(e){ toast(e.message); return; }
-  renderTop(); renderThread(); updateBusy(); renderPanel(); updateTarget(); S.stick = true; scrollBottom(true);
+  renderTop(); renderThread(); updateBusy(); renderPanel(); updateTarget(); showBriefing(id); S.stick = true; scrollBottom(true);
 }
 function upsertRoom(r){
   const { messages, ...sum } = r;

@@ -31,6 +31,9 @@ async function main() {
   if (/핑퐁/.test(lastUser)) reply += kind === 'claude' ? '\n\n다음: @코덱스 이어서 봐줘' : '\n\n다음: @클로드 다시 봐줘';
   if (/넘겨/.test(lastUser) && kind === 'claude') reply += '\n\n다음: @오픈코드 의견 줘';
   if (/기억해/.test(lastUser)) reply += `\n\n<기억>\n- ${kind} 합의: 슬라이드는 10장\n- 색은 주황\n</기억>`;
+  if (/정리다시/.test(lastUser)) reply += `\n\n<기억>\n- 새로 정한 것\n</기억>`;
+  if (/덧붙여/.test(lastUser)) { const m = prompt.match(/\[확정\] (- [^\n]+)/); reply += `\n\n<기억>\n${m ? m[1].replace(/[.。]\s*$/, '') + '. 그리고 덧붙임' : '- x'}\n</기억>`; }
+  if (/아이디어줘/.test(lastUser)) reply += `\n\n나중에 해볼 아이디어: 다음엔 사례 영상도 넣자`;
   if (/언급만/.test(lastUser) && kind === 'claude') reply += '\n\n@코덱스 말도 일리가 있어.\n> @오픈코드 인용';
   const slow = /느리게/.test(lastUser);
   if (/실패멘션/.test(lastUser)) { out(kind==='claude'?{ type: 'assistant', message: { content: [{ type: 'text', text: '반쯤 하다 망했어 @코덱스 도와줘' }] } }:{type:'x'}); process.stderr.write('boom\n'); process.exit(2); }

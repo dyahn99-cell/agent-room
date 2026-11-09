@@ -9,7 +9,7 @@ for (const k of ['claude', 'codex', 'opencode']) fs.symlinkSync(path.join(__dirn
 fs.chmodSync(path.join(__dirname, 'mock-agent.js'), 0o755);
 const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.default.json')));
 for (const k in cfg.agents) cfg.agents[k].command = path.join(BIN, k);
-cfg.agents.codex.sandbox = 'on'; cfg.port = 8791; cfg.notify = false;
+cfg.agents.codex.sandbox = 'off'; cfg.port = 8791; cfg.notify = false;
 fs.writeFileSync(path.join(TMP, 'config.json'), JSON.stringify(cfg));
 const DATA = path.join(TMP, 'data'), LOG = path.join(TMP, 'mock.log');
 const W = (n) => { const d = path.join(TMP, 'work', n); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'README.md'), '# 원본\n'); return d; };
@@ -102,6 +102,7 @@ const newRoom = async (title, cwd) => (await api('/api/rooms', { method: 'POST',
       check("'다음:' 줄은 다음 AI 호출", ag.slice(1).join() === 'claude,opencode', ag.join()); }
     // 9. 토론 모드: 순서·라운드·정리, 자동 호출 없음
     { const d = W('debate'); const rid = await newRoom('토론', d);
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ agents: { codex: { noSandbox: true } } }) });
       await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '핑퐁 주제로 토론', debate: { participants: ['claude', 'codex'], rounds: 2, summarizer: 'opencode' } }) });
       const r = await idle(rid); const ag = r.messages.filter((x) => x.role === 'agent');
       const seq = ag.map((x) => x.agent + (x.debate ? (x.debate.final ? ':정리' : ':' + x.debate.round) : '')).join(',');
@@ -122,6 +123,7 @@ const newRoom = async (title, cwd) => (await api('/api/rooms', { method: 'POST',
       check('방 메모가 AI에게 전달', fs.readFileSync(LOG, 'utf8').includes('[방 메모 — 꼭 지킬 것] slides 폴더 안에서만 작업'), 'missing'); }
     // 12. 방 기억: AI가 정리 → 저장·본문에서 숨김·다음 프롬프트 전달·사용자 수정·이전 버전 복구
     { const d = W('mem'); const rid = await newRoom('기억', d); fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ agents: { codex: { noSandbox: true } } }) });
       await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 이거 기억해' }) });
       let r = await idle(rid); const m = r.messages.filter((x) => x.role === 'agent').pop();
       check('AI가 정리한 기억 저장', /슬라이드는 10장/.test(r.memory) && r.memoryBy === 'claude', r.memory);
@@ -135,6 +137,37 @@ const newRoom = async (title, cwd) => (await api('/api/rooms', { method: 'POST',
       check('이전 버전으로 복구', /슬라이드는 10장/.test(r.memory), r.memory);
       const ex = await api(`/api/rooms/${rid}/memexport`, { method: 'POST' });
       check('DECISIONS.md 내보내기', ex.status === 200 && /슬라이드는 10장/.test(fs.readFileSync(path.join(d, 'DECISIONS.md'), 'utf8')), ex.status); }
+    // 13. 코덱스 샌드박스가 안 되면 기본 거부, 허용하면 실행 + 스냅샷
+    { const d = W('nosb'); const rid = await newRoom('샌드박스', d); fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@코덱스 안녕' }) });
+      let r = await idle(rid); let m = r.messages.filter((x) => x.role === 'agent').pop();
+      check('샌드박스 없으면 코덱스 실행 거부', m.status === 'error' && m.needsNoSandbox && !fs.readFileSync(LOG, 'utf8').includes('===== codex'), m.status);
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ agents: { codex: { noSandbox: true } } }) });
+      await api(`/api/rooms/${rid}/retry`, { method: 'POST', body: JSON.stringify({ msgId: m.id }) });
+      r = await idle(rid); m = r.messages.filter((x) => x.role === 'agent').pop();
+      check('허용하면 실행 + 스냅샷 보호', m.status === 'done' && !!m.checkpoint && /danger-full-access/.test(fs.readFileSync(LOG, 'utf8')), m.status + ' cp=' + !!m.checkpoint); }
+    // 14. 확정한 기억 줄은 AI가 정리하면서 빼도 다시 들어감
+    { const d = W('appr'); const rid = await newRoom('확정', d);
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 이거 기억해' }) }); let r = await idle(rid);
+      const line = r.memory.split('\n')[0];
+      r = (await api(`/api/rooms/${rid}/memline`, { method: 'POST', body: JSON.stringify({ line, action: 'approve' }) })).body;
+      check('기억 줄 확정', r.memoryMeta[line] && r.memoryMeta[line].approved, JSON.stringify(r.memoryMeta));
+      fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 정리다시' }) }); r = await idle(rid);
+      check('AI가 빼도 확정 줄은 유지', r.memory.includes(line) && r.memory.includes('새로 정한 것') && !r.memory.includes('색은 주황'), r.memory);
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 확인' }) }); await idle(rid);
+      check('확정 줄은 [확정] 표시로 전달', fs.readFileSync(LOG, 'utf8').includes('[확정] ' + line), 'missing');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 덧붙여' }) }); r = await idle(rid);
+      const ls = r.memory.split('\n');
+      check('확정 줄에 덧붙이면 원래 줄 + 새 줄로 분리', ls.filter((x) => x.startsWith(line.replace(/[.。]\s*$/, ''))).length === 1 && ls.includes(line) && ls.includes('- 그리고 덧붙임'), r.memory); }
+    // 15. 아이디어 보관함
+    { const d = W('idea'); const rid = await newRoom('아이디어', d);
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 아이디어줘' }) }); let r = await idle(rid);
+      check('AI의 "아이디어:" 줄 수집', (r.ideas || []).some((i) => i.text === '다음엔 사례 영상도 넣자' && i.by === 'claude'), JSON.stringify(r.ideas));
+      r = (await api(`/api/rooms/${rid}/ideas`, { method: 'POST', body: JSON.stringify({ text: '표지에 현장 사진' }) })).body;
+      const it = r.ideas.find((i) => i.text === '표지에 현장 사진');
+      r = (await api(`/api/rooms/${rid}/ideas`, { method: 'POST', body: JSON.stringify({ promote: it.id }) })).body;
+      check('아이디어 → 확정 기억', r.memory.includes('- 표지에 현장 사진') && r.memoryMeta['- 표지에 현장 사진'].approved && !r.ideas.some((i) => i.id === it.id), r.memory); }
   } catch (e) { check('테스트 실행', false, e.stack); }
   srv.kill('SIGTERM'); await sleep(500);
   const fail = results.filter((r) => !r[1]).length;
