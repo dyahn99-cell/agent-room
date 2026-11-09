@@ -225,6 +225,23 @@ textarea.inp::placeholder{color:var(--text3)}
 .conn{position:fixed;top:10px;left:50%;transform:translateX(-50%);background:var(--err);color:#fff;font-size:12.5px;padding:5px 12px;border-radius:999px;z-index:40;display:none}
 .conn.show{display:block}
 
+/* 0.8 */
+.msg.manager .who .n{color:var(--text)}
+.mgr-av{background:linear-gradient(135deg,#2B2A27,#55524A)}
+.mgrbox{border:1px solid var(--line2);border-radius:14px;padding:12px 14px;background:var(--surface)}
+.gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.gal a,.gal div.it{display:block;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--bg);text-decoration:none;color:var(--text)}
+.gal img{width:100%;height:100px;object-fit:cover;display:block;background:var(--raised)}
+.gal .ph{height:100px;display:grid;place-items:center;background:var(--raised);font-size:28px}
+.gal .cap{padding:6px 8px;font-size:12px;line-height:1.4}
+.gal .cap small{display:block;color:var(--text3)}
+.stt{width:100%;border-collapse:collapse;font-size:13.5px}
+.stt th,.stt td{padding:7px 6px;border-bottom:1px solid var(--line);text-align:right}
+.stt th:first-child,.stt td:first-child{text-align:left}
+.sidebtn{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;font-size:14px;color:var(--text2);width:100%;text-align:left}
+.sidebtn:hover{background:var(--raised);color:var(--text)}
+.sidebtn .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);margin-left:auto}
+
 /* 0.7 */
 .mcard{margin:8px 12px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:14px}
 .mcard.ok{border-color:color-mix(in srgb,var(--ok) 45%,var(--line));background:color-mix(in srgb,var(--ok) 4%,var(--surface))}
@@ -509,6 +526,11 @@ function renderShell(){
   <aside class="side" id="side">
     <div class="brand"><div class="mark">${I.mark}</div><b>Agent Room</b></div>
     <button class="newbtn" id="newRoom"><span class="plus">${I.plus}</span>새 방 만들기</button>
+    <div style="margin-top:6px">
+      <button class="sidebtn" id="sbBrief">📰 브리핑<span id="briefDot"></span></button>
+      <button class="sidebtn" id="sbGallery">🖼 결과물 갤러리</button>
+      <button class="sidebtn" id="sbStats">📊 AI 성적표</button>
+    </div>
     <h6>대화방</h6>
     <div class="rooms" id="rooms"></div>
     <div class="side-foot">
@@ -525,6 +547,9 @@ function renderShell(){
   </main>
   <aside class="panel" id="panel"></aside>`;
   $('#newRoom').onclick = () => openNewRoom();
+  $('#sbBrief').onclick = () => { closeSide(); openBriefings(); };
+  $('#sbGallery').onclick = () => { closeSide(); openGallery(); };
+  $('#sbStats').onclick = () => { closeSide(); openStats(); };
   $('#theme').onclick = toggleTheme;
   $('#verBtn').onclick = openUpdate;
   $('#scroll').addEventListener('scroll', () => {
@@ -564,6 +589,84 @@ function renderTop(){
   renderMemo();
   $('#titleBtn').onclick = $('#settingsBtn').onclick = () => openSettings();
   $('#folderChip').onclick = () => openSettings();
+}
+
+// ---------- 관리자 우편함 ----------
+async function openManager(prefill){
+  const r = curRoom(); if (!r) return;
+  showModal(`<header><h2>관리자에게 보내기</h2><button class="iconbtn" id="mClose">${I.x}</button></header><div class="mbody" style="display:grid;place-items:center;min-height:120px"><span class="spin"></span></div>`);
+  $('#mClose').onclick = closeOverlays;
+  let st = {}; try { st = await api('/api/manager'); } catch {}
+  const memN = (r.memory||'').split('\n').filter(x=>x.trim()).length;
+  const sent = (r.managerSent||[]).slice().reverse();
+  $('#modal').innerHTML = `<header><h2>관리자에게 보내기</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
+    <div class="mbody">
+      <p style="margin:0 0 10px;color:var(--text2);font-size:13.5px">이 방의 <b>기억 ${memN}줄</b>, <b>아이디어 ${(r.ideas||[]).length}개</b>, <b>최근 대화 20개</b>를 GitHub 우편함으로 보내요. 관리자(Claude)가 반영하면 답장이 이 방에 떠요.</p>
+      ${st.public ? '<div class="errbox" style="margin-bottom:10px;font-size:13px">⚠️ 저장소가 <b>공개</b>라서 보낸 내용도 누구나 볼 수 있어요. GitHub에서 저장소를 비공개로 바꾸는 걸 권해요.</div>' : ''}
+      ${st.connected ? '' : `<div class="mgrbox" style="margin-bottom:10px"><b style="font-size:14px">처음 한 번: GitHub 연결</b><p style="margin:6px 0;font-size:13px;color:var(--text2)">GitHub → Settings → Developer settings → Fine-grained tokens에서 <b>agent-room</b> 저장소만, Contents <b>읽기·쓰기</b> 권한으로 토큰을 만들어 붙여주세요.</p><div style="display:flex;gap:6px"><input id="mgrTok" placeholder="github_pat_..." style="flex:1;min-width:0;height:36px;border:1px solid var(--line2);border-radius:9px;background:var(--bg);padding:0 10px;font-family:var(--mono);font-size:13px"><button class="btn sm primary" id="mgrTokBtn">연결</button></div></div>`}
+      <div class="field"><label>관리자에게 한마디 (선택)</label><textarea class="reason" id="mgrNote" placeholder="예: 셋이 합의한 2단계 로드맵이야. 5번부터 만들어줘">${esc(prefill||'')}</textarea></div>
+      ${sent.length ? `<div class="rsec">보낸 기록</div>${sent.map(x=>`<div class="fl" style="font-family:var(--sans)">${fmtTime(x.at)} · ${x.replied?'<span class="review ok">답장 옴</span>':'<span class="review" style="background:var(--raised);color:var(--text2)">기다리는 중</span>'} ${esc(x.note||'')}</div>`).join('')}` : ''}
+    </div>
+    <footer><button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk" ${st.connected?'':'disabled'}>보내기</button></footer>`;
+  $('#mClose').onclick = $('#mCancel').onclick = closeOverlays;
+  if ($('#mgrTokBtn')) $('#mgrTokBtn').onclick = async () => { const t=$('#mgrTok').value.trim(); if (!t) return; $('#mgrTokBtn').disabled=true; try { await api('/api/manager/token', { method:'POST', body:JSON.stringify({ token:t }) }); toast('GitHub에 연결했어요'); openManager($('#mgrNote').value); } catch(e){ toast(e.message); $('#mgrTokBtn').disabled=false; } };
+  $('#mOk').onclick = async () => { $('#mOk').disabled=true; $('#mOk').textContent='보내는 중…'; try { await api(`/api/rooms/${r.id}/manager`, { method:'POST', body:JSON.stringify({ note:$('#mgrNote').value }) }); closeOverlays(); toast('관리자에게 보냈어요'); } catch(e){ toast(e.message); $('#mOk').disabled=false; $('#mOk').textContent='보내기'; } };
+}
+
+// ---------- 이어가기 / 슬라이드 ----------
+function openContinue(){
+  const r = curRoom(); if (!r) return;
+  showModal(`<header><h2>새 방으로 이어가기</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
+    <div class="mbody"><p style="margin:0 0 10px;color:var(--text2);font-size:13.5px">방 기억(확정 포함), 아이디어, 방 메모, AI 설정, 지난 토론 정리를 새 방으로 가져가요. 긴 대화 기록은 두고 가서 AI가 가볍게 새로 시작해요.</p>
+    <div class="field"><label>새 방 이름</label><input id="ctTitle" value="${esc(r.title)} 2"></div></div>
+    <footer><button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">이어가기</button></footer>`);
+  $('#mClose').onclick = $('#mCancel').onclick = closeOverlays;
+  $('#mOk').onclick = async () => { try { const nr = await api(`/api/rooms/${r.id}/continue`, { method:'POST', body:JSON.stringify({ title:$('#ctTitle').value }) }); upsertRoom(nr); closeOverlays(); openRoom(nr.id); } catch(e){ toast(e.message); } };
+}
+function prepSlides(){
+  const r = curRoom(); if (!r) return;
+  if (!r.writer){ toast('슬라이드를 만들 AI에게 작성 권한을 먼저 주세요'); openPanel('members'); return; }
+  const t = $('#inp'); const nm = agent(r.writer).name;
+  t.value = `@${nm} 지금까지 대화와 방 기억을 바탕으로 slides/index.html 에 HTML 슬라이드를 만들어줘. 16:9, 한 장씩 넘기기(←→ 키, 스와이프), 장수와 대상은 방 기억 기준. 끝나면 장별 제목만 짧게 보고해줘.`;
+  t.focus(); autosize(); updateSend(); updateTarget();
+}
+
+// ---------- 갤러리 / 성적표 / 브리핑 ----------
+async function openGallery(){
+  showModal(`<header><h2>결과물 갤러리</h2><button class="iconbtn" id="mClose">${I.x}</button></header><div class="mbody" id="galBody" style="min-height:160px;display:grid;place-items:center"><span class="spin"></span></div>`);
+  $('#mClose').onclick = closeOverlays; $('#modal').style.width = 'min(860px,calc(100vw - 32px))';
+  try {
+    const items = await api('/api/gallery');
+    $('#galBody').style.display='block';
+    $('#galBody').innerHTML = items.length ? `<div class="gal">${items.map(it => { const href = viewUrl(it.roomId, it.path);
+      return `<a href="${href}" target="_blank" rel="noopener">${it.kind==='image' ? `<img loading="lazy" src="${href}">` : '<div class="ph">📄</div>'}<div class="cap">${esc(it.path.split('/').pop())}<small>${esc(it.room)} · ${esc(agent(it.agent).name)} · ${fmtTime(it.at)}</small></div></a>`; }).join('')}</div>`
+      : '<div style="color:var(--text3);text-align:center">아직 HTML이나 이미지 결과물이 없어요.</div>';
+  } catch(e){ toast(e.message); }
+}
+async function openStats(days){
+  days = days || 7;
+  showModal(`<header><h2>AI 성적표</h2><button class="iconbtn" id="mClose">${I.x}</button></header><div class="mbody" id="stBody" style="min-height:120px"><span class="spin"></span></div>`);
+  $('#mClose').onclick = closeOverlays;
+  try {
+    const st = await api('/api/stats?days='+days);
+    const rows = Object.entries(st.agents);
+    $('#stBody').innerHTML = `<div class="seg" style="margin-bottom:10px">${[7,30].map(d=>`<button data-d="${d}" class="${d===days?'on':''}">최근 ${d}일</button>`).join('')}</div>
+      <table class="stt"><thead><tr><th>AI</th><th>답</th><th>성공률</th><th>실패</th><th>파일 작업</th><th>승인/반려</th><th>평균 시간</th><th>기억·아이디어</th></tr></thead><tbody>
+      ${rows.map(([id,s]) => `<tr><td><b style="color:${agent(id).color}">${esc(agent(id).name)}</b></td><td>${s.turns}</td><td>${s.turns?Math.round(s.done/s.turns*100)+'%':'-'}</td><td>${s.error}</td><td>${s.changes}</td><td>${s.approved}/${s.rejected}</td><td>${s.avgSec!=null?s.avgSec+'초':'-'}</td><td>${s.memory}/${s.ideas}</td></tr>`).join('')}
+      </tbody></table><p style="font-size:12.5px;color:var(--text3);margin:10px 0 0">방 ${st.rooms}개 · 내 메시지 ${st.userMsgs}개 · 승인 대기 ${st.pending}건. 숫자는 이 기기에 남은 기록 기준이에요.</p>`;
+    $('#stBody').querySelectorAll('[data-d]').forEach(b => b.onclick = () => openStats(+b.dataset.d));
+  } catch(e){ toast(e.message); }
+}
+async function openBriefings(){
+  S.briefNew = false; const dot = $('#briefDot'); if (dot) dot.className = '';
+  showModal(`<header><h2>브리핑</h2><button class="iconbtn" id="mClose">${I.x}</button></header><div class="mbody" id="brBody" style="min-height:120px"><span class="spin"></span></div>
+    <footer><span style="flex:1;font-size:12.5px;color:var(--text3);align-self:center">매일 8:00 아침 브리핑, 월요일 8:30 주간 회고가 자동으로 와요</span><button class="btn" id="brWeek">주간 회고 지금</button><button class="btn primary" id="brNow">지금 브리핑</button></footer>`);
+  $('#mClose').onclick = closeOverlays;
+  const load = async () => { const list = (await api('/api/briefings')).slice().reverse();
+    $('#brBody').innerHTML = list.length ? list.map(b => `<div class="mcard" style="margin:8px 0"><div class="ft" style="margin:0 0 6px"><span class="badge ${b.kind==='weekly'?'ok':'ai'}">${b.kind==='weekly'?'주간 회고':'아침 브리핑'}</span><span>${new Date(b.at).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'})}</span></div><div class="md">${md(b.text)}</div></div>`).join('') : '<div style="color:var(--text3)">아직 브리핑이 없어요. "지금 브리핑"을 눌러보세요.</div>'; };
+  try { await load(); } catch(e){ toast(e.message); }
+  $('#brNow').onclick = async () => { await api('/api/briefings', { method:'POST', body:JSON.stringify({ kind:'daily' }) }); load(); };
+  $('#brWeek').onclick = async () => { await api('/api/briefings', { method:'POST', body:JSON.stringify({ kind:'weekly' }) }); load(); };
 }
 
 // ---------- 다시 왔을 때 브리핑 ----------
@@ -768,6 +871,7 @@ function renderMsg(m){
     const atts = (m.attachments||[]).length ? `<div class="atts">${m.attachments.map(a=>`<div class="att">${I.file}<span>${esc(a.name)}</span></div>`).join('')}</div>` : '';
     return `<div class="msg user" id="m-${m.id}">${atts}${m.debate?`<div class="dbtag" style="margin-bottom:5px">토론 시작 · ${m.debate.participants.map(id=>esc(agent(id).name)).join('→')} ×${m.debate.rounds}${m.debate.summarizer?' · 정리 '+esc(agent(m.debate.summarizer).name):''}</div>`:''}<div class="bubble">${esc(m.text)}</div></div>`;
   }
+  if (m.role === 'manager') return `<div class="msg agent manager" id="m-${m.id}"><div class="who"><div class="av mgr-av">✦</div><span class="n">관리자</span><span class="tag" style="background:var(--raised);color:var(--text2)">Claude</span><span class="time">${fmtTime(m.ts)}</span></div><div class="body"><div class="mgrbox md">${md(m.text)}</div></div></div>`;
   if (m.role === 'system') return `<div class="msg system" id="m-${m.id}"><div>${esc(m.text)}${m.undoCheckpoint?` <button class="linkbtn" data-undo="${m.id}">되돌리기 취소</button>`:''}</div></div>`;
   const a = agent(m.agent);
   const running = m.status === 'running';
@@ -1013,6 +1117,13 @@ const COMMANDS = [
   { c:'/새방', d:'새 방 만들기', run:()=>openNewRoom() },
   { c:'/방설정', d:'방 이름·폴더·자동 턴', run:()=>openSettings() },
   { c:'/업데이트', d:'새 버전 확인', run:()=>openUpdate() },
+  { c:'/관리자', d:'이 방 합의·피드백을 관리자(Claude)에게 보내기', arg:true, run:(t)=>openManager(t) },
+  { c:'/관리자확인', d:'관리자 답장 지금 확인', run:()=>api(`/api/rooms/${S.current}/managercheck`,{method:'POST'}).then(()=>toast('확인했어요')).catch(e=>toast(e.message)) },
+  { c:'/이어가기', d:'기억·아이디어를 가지고 새 방으로', run:()=>openContinue() },
+  { c:'/슬라이드', d:'대화를 HTML 슬라이드로 (작성 권한 AI)', run:()=>prepSlides() },
+  { c:'/갤러리', d:'모든 방의 결과물 모아보기', run:()=>openGallery() },
+  { c:'/성적표', d:'AI별 답·실패·승인 기록', run:()=>openStats() },
+  { c:'/브리핑', d:'아침 브리핑·주간 회고 보기', run:()=>openBriefings() },
 ];
 let cSel = 0;
 function cmdMatches(){
@@ -1106,7 +1217,7 @@ function upsertRoom(r){
 
 // ---------- 모달: 새 방 / 설정 ----------
 function showModal(html){ $('#modal').innerHTML = html; $('#modal').classList.add('show'); $('#scrim').classList.add('show'); }
-function closeOverlays(){ $('#modal').classList.remove('show'); $('#drawer').classList.remove('show'); $('#panel')?.classList.remove('open'); $('#scrim').classList.remove('show'); closeSide(); }
+function closeOverlays(){ $('#modal').style.width=''; $('#modal').classList.remove('show'); $('#drawer').classList.remove('show'); $('#panel')?.classList.remove('open'); $('#scrim').classList.remove('show'); closeSide(); }
 function openSide(){ $('#side').classList.add('open'); $('#scrim').classList.add('show'); }
 function closeSide(){ $('#side')?.classList.remove('open'); if (!$('#modal').classList.contains('show') && !$('#drawer').classList.contains('show')) $('#scrim').classList.remove('show'); }
 
@@ -1396,6 +1507,9 @@ function connect(){
       const before = sig(S.rooms.find(x=>x.id===ev.room.id));
       upsertRoom(ev.room); renderSide();
       if (ev.room.id === S.current){ renderTop(); renderMemo(); if (before !== sig(ev.room)) renderComposer(); else { updateBusy(); updateTarget(); } renderPanel(); }
+    } else if (ev.type === 'briefing'){
+      S.briefNew = true; const dot = $('#briefDot'); if (dot) dot.className = 'dot';
+      if (document.hidden) showNotify(ev.briefing.kind==='weekly'?'주간 회고':'아침 브리핑', ev.briefing.text.split('\n')[0]);
     } else if (ev.type === 'usage'){
       S.usage = ev.usage; renderPanel();
     } else if (ev.type === 'restarting'){

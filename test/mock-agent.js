@@ -46,6 +46,7 @@ async function main() {
     await sleep(300);
     out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: '# readme' }] } });
     if (slow) await sleep(30000);
+    if (writer && /페이지/.test(lastUser)) { fs.mkdirSync('slides', { recursive: true }); fs.writeFileSync('slides/index.html', '<h1>slides</h1>'); }
     if (writer) {
       out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'Write', input: { file_path: 'hello-claude.txt' } }] } });
       fs.writeFileSync('hello-claude.txt', 'hello from claude\n' + Date.now() + '\n');

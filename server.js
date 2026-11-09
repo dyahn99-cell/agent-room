@@ -15,7 +15,7 @@ const ROOMS_DIR = path.join(DATA, 'rooms');
 const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS]) fs.mkdirSync(d, { recursive: true });
 
@@ -235,6 +235,156 @@ function readCodexLimits(threadId) {
   }
 }
 
+// ---------- 관리자 우편함 (GitHub inbox 브랜치) ----------
+const INBOX_DIR = path.join(DATA, 'inbox');
+async function inboxRemote() {
+  if (process.env.AGENT_ROOM_INBOX_REMOTE) return process.env.AGENT_ROOM_INBOX_REMOTE;
+  const r = await run('git', ['-C', APP_DIR, 'remote', 'get-url', 'origin'], { timeout: 10000 });
+  return r.ok ? r.stdout.trim() : null;
+}
+const gitQuiet = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_AUTHOR_NAME: 'agent-room', GIT_AUTHOR_EMAIL: 'room@local', GIT_COMMITTER_NAME: 'agent-room', GIT_COMMITTER_EMAIL: 'room@local' };
+async function inboxSync() {
+  const remote = await inboxRemote();
+  if (!remote) return { ok: false, error: '앱이 git으로 설치돼 있지 않아요' };
+  if (!fs.existsSync(path.join(INBOX_DIR, '.git'))) {
+    fs.rmSync(INBOX_DIR, { recursive: true, force: true });
+    const c = await run('git', ['clone', '--quiet', '--depth', '30', '--single-branch', '-b', 'inbox', remote, INBOX_DIR], { timeout: 90000, env: gitQuiet });
+    if (!c.ok) return { ok: false, error: clip((c.stderr || '').trim(), 300) };
+  } else {
+    await run('git', ['-C', INBOX_DIR, 'remote', 'set-url', 'origin', remote], { env: gitQuiet });
+    const f = await run('git', ['-C', INBOX_DIR, 'fetch', '--quiet', 'origin', 'inbox'], { timeout: 60000, env: gitQuiet });
+    if (!f.ok) return { ok: false, error: clip((f.stderr || '').trim(), 300) };
+    await run('git', ['-C', INBOX_DIR, 'reset', '--quiet', '--hard', 'origin/inbox'], { env: gitQuiet });
+  }
+  return { ok: true };
+}
+async function managerStatus() {
+  const remote = await inboxRemote();
+  if (!remote) return { connected: false, reason: 'git 설치가 아니에요. install.sh로 다시 설치해 주세요.' };
+  const hasToken = /x-access-token:|@github\.com/.test(remote) && /:\/\/[^/]*@/.test(remote);
+  const pub = await run('git', ['ls-remote', '--heads', remote.replace(/:\/\/[^/]*@/, '://'), 'inbox'], { timeout: 20000, env: { ...gitQuiet, GIT_ASKPASS: 'true' } });
+  return { connected: hasToken, public: pub.ok, reason: hasToken ? null : '관리자에게 보내려면 GitHub 토큰을 한 번 연결해야 해요.' };
+}
+function managerDoc(room, note) {
+  const mm = room.memoryMeta || {};
+  const mem = String(room.memory || '').split('\n').filter((l) => l.trim()).map((l) => (mm[l.trim()] && mm[l.trim()].approved ? '[확정] ' : '') + l.trim()).join('\n');
+  const recent = room.messages.filter((m) => m.role !== 'system' && m.status !== 'running').slice(-20)
+    .map((m) => `**[${speaker(m)}]** ${m.status === 'error' ? '(실패) ' : ''}${clip(String(m.text || '').replace(/\n{2,}/g, '\n'), 700)}`).join('\n\n');
+  return [`# ${room.title} → 관리자`, '', `- 보낸 시각: ${new Date().toLocaleString('ko-KR', { timeZone: tz() })}`, `- 앱 버전: ${VERSION}`, `- 방: ${room.id}`, '',
+    '## 사용자 메모', note && note.trim() ? note.trim() : '(없음)', '', '## 방 기억 (합의)', mem || '(없음)', '',
+    '## 아이디어 보관함', (room.ideas || []).map((i) => '- ' + i.text).join('\n') || '(없음)', '', '## 최근 대화', recent || '(없음)', ''].join('\n');
+}
+async function sendToManager(room, note) {
+  const st = await inboxSync();
+  if (!st.ok) return { ok: false, error: '우편함에 연결하지 못했어요: ' + st.error };
+  const d = new Date(); const pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}-${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
+  const id = `${stamp}-${room.id}`;
+  fs.mkdirSync(path.join(INBOX_DIR, 'inbox'), { recursive: true });
+  fs.writeFileSync(path.join(INBOX_DIR, 'inbox', id + '.md'), managerDoc(room, note));
+  await run('git', ['-C', INBOX_DIR, 'add', '-A'], { env: gitQuiet });
+  await run('git', ['-C', INBOX_DIR, 'commit', '-q', '-m', `${room.title}: 관리자에게`], { env: gitQuiet });
+  let p = await run('git', ['-C', INBOX_DIR, 'push', '-q', 'origin', 'HEAD:inbox'], { timeout: 60000, env: gitQuiet });
+  if (!p.ok) {
+    await run('git', ['-C', INBOX_DIR, 'pull', '-q', '--rebase', 'origin', 'inbox'], { timeout: 60000, env: gitQuiet });
+    p = await run('git', ['-C', INBOX_DIR, 'push', '-q', 'origin', 'HEAD:inbox'], { timeout: 60000, env: gitQuiet });
+  }
+  if (!p.ok) {
+    await run('git', ['-C', INBOX_DIR, 'reset', '-q', '--hard', 'origin/inbox'], { env: gitQuiet });
+    const e = (p.stderr || '').trim();
+    return { ok: false, error: /403|denied|Authentication|could not read Username|terminal prompts disabled/i.test(e) ? 'GitHub 쓰기 권한이 없어요. 관리자 연결에서 토큰을 넣어주세요.' : '보내기 실패: ' + clip(e, 200) };
+  }
+  room.managerSent = room.managerSent || [];
+  room.managerSent.push({ id, at: now(), note: clip(note || '', 300), replied: false });
+  saveRoom(room); pushRoom(room);
+  return { ok: true, id };
+}
+let pollingReplies = false;
+async function pollReplies() {
+  if (pollingReplies) return; pollingReplies = true;
+  try {
+    const waiting = [...rooms.values()].some((r) => (r.managerSent || []).some((x) => !x.replied));
+    if (!waiting) return;
+    const st = await inboxSync(); if (!st.ok) return;
+    for (const room of rooms.values()) for (const sent of room.managerSent || []) {
+      if (sent.replied) continue;
+      const f = path.join(INBOX_DIR, 'replies', sent.id + '.md');
+      if (!fs.existsSync(f)) continue;
+      const body = fs.readFileSync(f, 'utf8').slice(0, 8000);
+      sent.replied = true; sent.repliedAt = now();
+      const m = { id: uid(), role: 'manager', text: body, ts: now(), forAgents: true, replyTo: sent.id };
+      room.messages.push(m); pushMessage(room, m, true); saveRoom(room);
+      broadcast({ type: 'idle', roomId: room.id, title: room.title, body: '관리자 답장이 왔어요' });
+      notifyText(room.title, '관리자 답장: ' + clip(body.replace(/^#.*\n/, '').replace(/\s+/g, ' '), 120));
+    }
+  } finally { pollingReplies = false; }
+}
+
+// ---------- 시간대 / 예약 브리핑 ----------
+const tz = () => config.timezone || 'Asia/Seoul';
+function localParts(d = new Date()) {
+  const f = new Intl.DateTimeFormat('en-GB', { timeZone: tz(), year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short', hour12: false });
+  const o = Object.fromEntries(f.formatToParts(d).map((x) => [x.type, x.value]));
+  return { date: `${o.year}-${o.month}-${o.day}`, hm: `${o.hour}:${o.minute}`, wd: o.weekday.toUpperCase() };
+}
+const BRIEF_FILE = path.join(DATA, 'briefings.json');
+let briefings = { list: [], ran: {} };
+try { briefings = JSON.parse(fs.readFileSync(BRIEF_FILE, 'utf8')); } catch { }
+function saveBriefings() { try { fs.writeFileSync(BRIEF_FILE, JSON.stringify(briefings)); } catch { } }
+function computeStats(sinceMs) {
+  const per = {};
+  for (const id of AGENT_IDS) per[id] = { turns: 0, done: 0, error: 0, stopped: 0, approved: 0, rejected: 0, changes: 0, durSum: 0, durN: 0, memory: 0, ideas: 0 };
+  let rooms_ = 0, userMsgs = 0, pending = 0;
+  for (const r of rooms.values()) {
+    let active = false;
+    for (const m of r.messages) {
+      if ((m.ts || 0) < sinceMs) continue;
+      if (m.role === 'user') { userMsgs++; active = true; }
+      if (m.role !== 'agent' || !per[m.agent]) continue;
+      active = true; const s = per[m.agent];
+      s.turns++; if (m.status === 'done') s.done++; else if (m.status === 'error') s.error++; else if (m.status === 'stopped') s.stopped++;
+      if (m.review === 'approved') s.approved++; if (m.review === 'rejected') s.rejected++;
+      if (m.changes && m.changes.length) { s.changes++; if (!m.review) pending++; }
+      if (m.doneAt && m.startedAt) { s.durSum += m.doneAt - m.startedAt; s.durN++; }
+      if (m.memoryUpdate) s.memory++;
+    }
+    for (const i of r.ideas || []) if (i.at >= sinceMs && per[i.by]) per[i.by].ideas++;
+    if (active) rooms_++;
+  }
+  for (const s of Object.values(per)) { s.avgSec = s.durN ? Math.round(s.durSum / s.durN / 1000) : null; delete s.durSum; delete s.durN; }
+  return { since: sinceMs, rooms: rooms_, userMsgs, pending, agents: per };
+}
+function briefingText(kind, st) {
+  const lines = [];
+  const name = (id) => config.agents[id].name;
+  const act = Object.entries(st.agents).filter(([, s]) => s.turns);
+  lines.push(`${kind === 'weekly' ? '이번 주' : '어제부터 지금까지'}: 방 ${st.rooms}개에서 내가 ${st.userMsgs}번 말하고, AI가 ${act.reduce((n, [, s]) => n + s.turns, 0)}번 답했어요.`);
+  for (const [id, s] of act) lines.push(`- ${name(id)}: 답 ${s.turns} · 실패 ${s.error} · 파일 작업 ${s.changes}${s.approved || s.rejected ? ` (승인 ${s.approved}/반려 ${s.rejected})` : ''}${s.avgSec != null ? ` · 평균 ${s.avgSec}초` : ''}`);
+  if (st.pending) lines.push(`- 승인 기다리는 작업 ${st.pending}건`);
+  const lim = Object.entries(usage).flatMap(([id, u]) => (u.windows || []).filter((w) => w.util >= 0.8).map((w) => `${name(id)} ${w.label} ${Math.round(w.util * 100)}%`));
+  if (lim.length) lines.push(`- 한도 주의: ${lim.join(', ')}`);
+  const waiting = [...rooms.values()].flatMap((r) => (r.managerSent || []).filter((x) => !x.replied).map(() => r.title));
+  if (waiting.length) lines.push(`- 관리자 답장 기다리는 중: ${waiting.length}건`);
+  return lines.join('\n');
+}
+function makeBriefing(kind) {
+  const since = now() - (kind === 'weekly' ? 7 : 1) * 86400000;
+  const st = computeStats(since);
+  const b = { id: uid(), kind, at: now(), text: briefingText(kind, st) };
+  briefings.list.push(b); if (briefings.list.length > 30) briefings.list.shift();
+  saveBriefings(); broadcast({ type: 'briefing', briefing: b });
+  notifyText(kind === 'weekly' ? 'Agent Room 주간 회고' : 'Agent Room 아침 브리핑', b.text.split('\n')[0]);
+  return b;
+}
+function scheduleTick() {
+  const b = config.briefing || {};
+  const { date, hm, wd } = localParts();
+  const daily = b.daily === undefined ? '08:00' : b.daily;
+  const weekly = b.weekly === undefined ? 'MON 08:30' : b.weekly;
+  if (daily && hm === daily && briefings.ran.daily !== date) { briefings.ran.daily = date; makeBriefing('daily'); }
+  if (weekly) { const [wdd, t] = weekly.split(' '); if (wd.startsWith(wdd.slice(0, 3)) && hm === t && briefings.ran.weekly !== date) { briefings.ran.weekly = date; makeBriefing('weekly'); } }
+}
+
 // ---------- 방 저장 ----------
 const rooms = new Map();
 const saveTimers = new Map();
@@ -271,6 +421,7 @@ function roomSummary(r) {
     queue: runtime(r.id).queue.map((q) => q.agent),
     queueInfo: runtime(r.id).queue.map((q) => ({ agent: q.agent, round: q.debate ? q.debate.round : null, final: !!(q.debate && q.debate.final) })),
     lastAgent: r.lastAgent || null,
+    managerSent: (r.managerSent || []).slice(-10),
     memo: r.memo || '',
     memory: r.memory || '', memoryBy: r.memoryBy || null, memoryAt: r.memoryAt || null, memoryMeta: r.memoryMeta || {}, ideas: r.ideas || [],
     memoryHistory: (r.memoryHistory || []).slice(-15).map((h, i, arr) => ({ i: (r.memoryHistory.length - arr.length) + i, at: h.at, by: h.by, lines: String(h.text || '').split('\n').filter((x) => x.trim()).length })),
@@ -511,6 +662,7 @@ function addIdea(room, text, by, msgId) {
 function speaker(m) {
   if (m.role === 'user') return '사용자';
   if (m.role === 'agent') return config.agents[m.agent]?.name || m.agent;
+  if (m.role === 'manager') return '관리자';
   return '시스템';
 }
 function preamble(room, agentId) {
@@ -915,6 +1067,13 @@ async function runAgent(room, job, cur) {
 }
 
 const TERMUX_NOTIFY = '/data/data/com.termux/files/usr/bin/termux-notification';
+function notifyText(title, body) {
+  if (config.notify === false || !fs.existsSync(TERMUX_NOTIFY)) return;
+  const link = `http://127.0.0.1:${PORT}/#${TOKEN}`;
+  const env = { ...process.env, PATH: '/data/data/com.termux/files/usr/bin:' + process.env.PATH };
+  delete env.LD_PRELOAD;
+  execFile(TERMUX_NOTIFY, ['--id', 'agentroom-brief', '--title', title, '--content', body, '--action', `termux-open-url ${link}`], { env, timeout: 10000 }, () => { });
+}
 function notifyIdle(room) {
   const last = [...room.messages].reverse().find((m) => m.role === 'agent');
   if (!last) return;
@@ -1065,6 +1224,35 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, modelCache.data);
     }
     if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usage);
+    if (p === '/api/stats' && req.method === 'GET') {
+      const days = Math.max(1, Math.min(90, +(url.searchParams.get('days') || 7)));
+      return send(res, 200, computeStats(now() - days * 86400000));
+    }
+    if (p === '/api/briefings' && req.method === 'GET') return send(res, 200, briefings.list.slice(-10));
+    if (p === '/api/briefings' && req.method === 'POST') { const b = await readJSON(req); return send(res, 200, makeBriefing(b.kind === 'weekly' ? 'weekly' : 'daily')); }
+    if (p === '/api/gallery' && req.method === 'GET') {
+      const items = [];
+      for (const r of rooms.values()) for (const m of r.messages) for (const f of m.changes || []) {
+        if (f.status === 'D' || !/\.(html?|png|jpe?g|gif|webp|svg)$/i.test(f.path)) continue;
+        items.push({ roomId: r.id, room: r.title, path: f.path, agent: m.agent, at: m.doneAt || m.ts, kind: /\.html?$/i.test(f.path) ? 'html' : 'image', msgId: m.id });
+      }
+      const seen = new Set(); const out = [];
+      for (const it of items.sort((a, b) => b.at - a.at)) { const k = it.roomId + it.path; if (seen.has(k)) continue; seen.add(k); out.push(it); }
+      return send(res, 200, out.slice(0, 200));
+    }
+    if (p === '/api/manager' && req.method === 'GET') return send(res, 200, await managerStatus());
+    if (p === '/api/manager/token' && req.method === 'POST') {
+      const b = await readJSON(req); const t = String(b.token || '').trim();
+      if (!/^[A-Za-z0-9_]{20,}$/.test(t)) return send(res, 400, { error: '토큰 모양이 이상해요. github_pat_ 또는 ghp_로 시작하는 값을 그대로 붙여주세요.' });
+      const cur = await inboxRemote(); if (!cur) return send(res, 400, { error: '앱이 git으로 설치돼 있지 않아요.' });
+      const m2 = cur.match(/github\.com[/:]([^/]+)\/([^/.]+)/); if (!m2) return send(res, 400, { error: '저장소 주소를 알 수 없어요.' });
+      const urlT = `https://x-access-token:${t}@github.com/${m2[1]}/${m2[2]}.git`;
+      const test = await run('git', ['ls-remote', '--heads', urlT, 'inbox'], { timeout: 30000, env: gitQuiet });
+      if (!test.ok) return send(res, 400, { error: '그 토큰으로 저장소에 접근하지 못했어요. 저장소 권한(Contents 읽기·쓰기)을 확인해 주세요.' });
+      await run('git', ['-C', APP_DIR, 'remote', 'set-url', 'origin', urlT]);
+      fs.rmSync(INBOX_DIR, { recursive: true, force: true });
+      return send(res, 200, await managerStatus());
+    }
     if (p === '/api/health' && req.method === 'GET') {
       return send(res, 200, await checkHealth(!!url.searchParams.get('force')));
     }
@@ -1232,6 +1420,27 @@ const server = http.createServer(async (req, res) => {
         systemMsg(room, '방 기억을 DECISIONS.md로 내보냈어요.');
         return send(res, 200, { ok: true });
       }
+      if (sub === '/manager' && req.method === 'POST') {
+        const b = await readJSON(req);
+        const r2 = await sendToManager(room, b.note || '');
+        if (!r2.ok) return send(res, 400, { error: r2.error });
+        const sm = systemMsg(room, `관리자에게 보냈어요. 답장이 오면 여기에 표시돼요. (#${r2.id.slice(0, 15)})`); sm.forAgents = true;
+        return send(res, 200, { ok: true, id: r2.id });
+      }
+      if (sub === '/managercheck' && req.method === 'POST') { await pollReplies(); return send(res, 200, { ok: true }); }
+      if (sub === '/continue' && req.method === 'POST') {
+        const b = await readJSON(req);
+        const nr = newRoom({ title: (b.title || '').trim() || room.title + ' (이어서)', cwd: room.cwd });
+        nr.memory = room.memory || ''; nr.memoryMeta = JSON.parse(JSON.stringify(room.memoryMeta || {})); nr.memoryAt = now(); nr.memoryBy = 'user';
+        nr.ideas = JSON.parse(JSON.stringify(room.ideas || [])); nr.memo = room.memo || '';
+        nr.agents = JSON.parse(JSON.stringify(room.agents || {})); nr.autoTurns = room.autoTurns; nr.defaultAgent = room.defaultAgent;
+        const last = [...room.messages].reverse().find((m) => m.role === 'agent' && m.debate && m.debate.final);
+        const carry = `"${room.title}" 방에서 이어왔어요. 방 기억 ${String(nr.memory).split('\n').filter((l) => l.trim()).length}줄, 아이디어 ${nr.ideas.length}개를 가져왔어요.` + (last ? `\n\n지난 토론 정리:\n${clip(last.text, 1500)}` : '');
+        const sm = { id: uid(), role: 'system', text: carry, ts: now(), forAgents: true, from: room.id };
+        nr.messages.push(sm); saveRoom(nr, true); pushRoom(nr);
+        systemMsg(room, `"${nr.title}" 방으로 이어갔어요.`);
+        return send(res, 200, roomSummary(nr));
+      }
       if (sub === '/dequeue' && req.method === 'POST') {
         const b = await readJSON(req);
         const rt = runtime(room.id);
@@ -1328,6 +1537,9 @@ const server = http.createServer(async (req, res) => {
 
 reapOrphans();
 writeCodexRules();
+setInterval(() => { try { scheduleTick(); } catch (e) { console.error('예약 브리핑 오류', e.message); } }, 30000);
+setInterval(() => { pollReplies().catch(() => { }); }, 10 * 60000);
+setTimeout(() => { pollReplies().catch(() => { }); }, 15000);
 loadRooms();
 checkAgents().then(() => {
   checkHealth(true).catch(() => { });

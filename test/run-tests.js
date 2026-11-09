@@ -23,7 +23,14 @@ const check = (name, ok, info = '') => { results.push([name, ok]); console.log(`
 const newRoom = async (title, cwd) => (await api('/api/rooms', { method: 'POST', body: JSON.stringify({ title, cwd }) })).body.id;
 
 (async () => {
-  const srv = spawn('node', [path.join(ROOT, 'server.js')], { env: { ...process.env, AGENT_ROOM_CONFIG: path.join(TMP, 'config.json'), AGENT_ROOM_DATA: DATA, MOCK_LOG: LOG, AGENT_ROOM_TEST_SNAPSHOT_DELAY: '800', CODEX_HOME: path.join(TMP, 'codexhome') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  // 관리자 우편함 테스트용 로컬 원격 저장소 (inbox 브랜치)
+  const { execFileSync } = require('child_process');
+  const BARE = path.join(TMP, 'remote.git'); execFileSync('git', ['init', '-q', '--bare', BARE]);
+  const SEED = path.join(TMP, 'seed'); execFileSync('git', ['init', '-q', '-b', 'inbox', SEED]);
+  fs.mkdirSync(path.join(SEED, 'replies')); fs.writeFileSync(path.join(SEED, 'replies', '.keep'), '');
+  const G = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a]).toString();
+  G(SEED, 'add', '-A'); G(SEED, 'commit', '-qm', 'init'); G(SEED, 'push', '-q', BARE, 'inbox');
+  const srv = spawn('node', [path.join(ROOT, 'server.js')], { env: { ...process.env, AGENT_ROOM_INBOX_REMOTE: BARE, AGENT_ROOM_CONFIG: path.join(TMP, 'config.json'), AGENT_ROOM_DATA: DATA, MOCK_LOG: LOG, AGENT_ROOM_TEST_SNAPSHOT_DELAY: '800', CODEX_HOME: path.join(TMP, 'codexhome') }, stdio: ['ignore', 'pipe', 'pipe'] });
   let srvOut = ''; srv.stdout.on('data', (d) => srvOut += d); srv.stderr.on('data', (d) => srvOut += d);
   for (let i = 0; i < 50 && !fs.existsSync(path.join(DATA, 'url.txt')); i++) await sleep(100);
   TOK = fs.readFileSync(path.join(DATA, 'token'), 'utf8').trim();
@@ -168,6 +175,39 @@ const newRoom = async (title, cwd) => (await api('/api/rooms', { method: 'POST',
       const it = r.ideas.find((i) => i.text === '표지에 현장 사진');
       r = (await api(`/api/rooms/${rid}/ideas`, { method: 'POST', body: JSON.stringify({ promote: it.id }) })).body;
       check('아이디어 → 확정 기억', r.memory.includes('- 표지에 현장 사진') && r.memoryMeta['- 표지에 현장 사진'].approved && !r.ideas.some((i) => i.id === it.id), r.memory); }
+    // 16. 관리자 우편함: 보내기 → 원격에 파일 → 답장 push → 방에 관리자 메시지
+    { const d = W('mgr'); const rid = await newRoom('관리자', d);
+      await api(`/api/rooms/${rid}/memory`, { method: 'POST', body: JSON.stringify({ text: '- 5번부터 만들기' }) });
+      const sres = await api(`/api/rooms/${rid}/manager`, { method: 'POST', body: JSON.stringify({ note: '2단계 부탁해' }) });
+      const id = sres.body.id;
+      G(SEED, 'pull', '-q', BARE, 'inbox');
+      const doc = fs.existsSync(path.join(SEED, 'inbox', id + '.md')) ? fs.readFileSync(path.join(SEED, 'inbox', id + '.md'), 'utf8') : '';
+      check('관리자에게 보내기 (우편함에 파일 생성)', sres.status === 200 && /2단계 부탁해/.test(doc) && /\[확정\] - 5번부터 만들기/.test(doc), sres.status + ' ' + JSON.stringify(sres.body));
+      fs.writeFileSync(path.join(SEED, 'replies', id + '.md'), '# 반영했어요\n- v0.9.0에 5번 넣음');
+      G(SEED, 'add', '-A'); G(SEED, 'commit', '-qm', 'reply'); G(SEED, 'push', '-q', BARE, 'HEAD:inbox');
+      await api(`/api/rooms/${rid}/managercheck`, { method: 'POST' });
+      const r = await room(rid); const mm = r.messages.find((x) => x.role === 'manager');
+      check('관리자 답장이 방에 표시 (AI에게도 전달)', mm && /v0\.9\.0에 5번 넣음/.test(mm.text) && mm.forAgents && r.managerSent[0].replied, JSON.stringify(r.managerSent));
+      fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 관리자가 뭐래?' }) }); await idle(rid);
+      check('AI가 관리자 답장을 봄', /\[관리자\] # 반영했어요/.test(fs.readFileSync(LOG, 'utf8')), 'missing'); }
+    // 17. 이어가기
+    { const d = W('cont'); const rid = await newRoom('원래 방', d);
+      await api(`/api/rooms/${rid}/memory`, { method: 'POST', body: JSON.stringify({ text: '- 12장\n- 주황' }) });
+      await api(`/api/rooms/${rid}/ideas`, { method: 'POST', body: JSON.stringify({ text: '영상 넣기' }) });
+      const nr = (await api(`/api/rooms/${rid}/continue`, { method: 'POST', body: JSON.stringify({ title: '이어진 방' }) })).body;
+      const full = await room(nr.id);
+      check('기억·아이디어 가지고 이어가기', full.title === '이어진 방' && full.memory.includes('- 12장') && full.memoryMeta['- 12장'].approved && full.ideas.length === 1 && full.messages[0].forAgents, JSON.stringify({ m: full.memory, i: full.ideas.length })); }
+    // 18. 갤러리·성적표·브리핑
+    { const d = W('gal'); const rid = await newRoom('갤러리', d);
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ writer: 'claude' }) });
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 페이지 만들어' }) }); await idle(rid);
+      const g = (await api('/api/gallery')).body;
+      check('갤러리에 HTML 결과물', g.some((x) => x.roomId === rid && x.path === 'slides/index.html' && x.kind === 'html'), JSON.stringify(g.slice(0, 3)));
+      const st = (await api('/api/stats?days=7')).body;
+      check('성적표 집계', st.agents.claude.turns > 5 && st.agents.claude.error >= 1 && st.agents.claude.approved >= 0, JSON.stringify(st.agents.claude));
+      const b = (await api('/api/briefings', { method: 'POST', body: JSON.stringify({ kind: 'daily' }) })).body;
+      check('브리핑 생성', /AI가 \d+번 답했어요/.test(b.text) && /클로드: 답/.test(b.text), b.text); }
   } catch (e) { check('테스트 실행', false, e.stack); }
   srv.kill('SIGTERM'); await sleep(500);
   const fail = results.filter((r) => !r[1]).length;
