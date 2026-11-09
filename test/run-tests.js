@@ -20,7 +20,7 @@ const api = async (p, o = {}) => { const r = await fetch(B + p, { ...o, headers:
 const room = async (rid) => (await api('/api/rooms/' + rid)).body;
 const idle = async (rid) => { for (let i = 0; i < 80; i++) { await sleep(150); const r = await room(rid); if (!r.busy && !r.queue.length) return r; } throw new Error('timeout'); };
 const check = (name, ok, info = '') => { results.push([name, ok]); console.log(`${ok ? '✅' : '❌'} ${name}${ok ? '' : '  → ' + info}`); };
-const newRoom = async (title, cwd) => (await api('/api/rooms', { method: 'POST', body: JSON.stringify({ title, cwd }) })).body.id;
+const newRoom = async (title, cwd, teamId) => (await api('/api/rooms', { method: 'POST', body: JSON.stringify({ title, cwd, teamId }) })).body.id;
 
 (async () => {
   // 관리자 우편함 테스트용 로컬 원격 저장소 (inbox 브랜치)
@@ -208,6 +208,36 @@ const newRoom = async (title, cwd) => (await api('/api/rooms', { method: 'POST',
       check('성적표 집계', st.agents.claude.turns > 5 && st.agents.claude.error >= 1 && st.agents.claude.approved >= 0, JSON.stringify(st.agents.claude));
       const b = (await api('/api/briefings', { method: 'POST', body: JSON.stringify({ kind: 'daily' }) })).body;
       check('브리핑 생성', /AI가 \d+번 답했어요/.test(b.text) && /클로드: 답/.test(b.text), b.text); }
+    // 19. 전문가(페르소나): 만든 전문가가 이름으로 불리고, 엔진·지시문·모델이 그대로 적용
+    { const st = (await api('/api/state')).body;
+      check('기본 패널·전문가 준비', st.teams.some((t) => t.id === 'panel4') && ['marcus', 'hunter', 'sage', 'ledger', 'claude', 'codex', 'opencode'].every((id) => st.agents.some((a) => a.id === id)), JSON.stringify(st.agents.map((a) => a.id)));
+      const pr = (await api('/api/personas', { method: 'POST', body: JSON.stringify({ name: '뮤즈', emoji: '🎨', color: '#DB2777', engine: 'opencode', model: 'meta/muse-spark', description: '아이디어 발산', systemPrompt: '너는 뮤즈, 엉뚱한 아이디어 담당이야.' }) })).body;
+      const d = W('persona'); const rid = await newRoom('전문가', d);
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ members: ['claude', pr.id] }) });
+      fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@뮤즈 아이디어 하나' }) });
+      const r = await idle(rid); const m = r.messages.filter((x) => x.role === 'agent').pop();
+      const log = fs.readFileSync(LOG, 'utf8');
+      check('이름으로 부르면 그 전문가가 답함 (엔진=오픈코드)', m.agent === pr.id && log.includes('===== opencode') && log.includes('meta/muse-spark'), m.agent);
+      check('전문가 지시문이 전달', log.includes('너는 뮤즈, 엉뚱한 아이디어 담당이야.') && log.includes('"뮤즈"'), 'missing');
+      check('방 멤버 표시', JSON.stringify(r.members) === JSON.stringify(['claude', pr.id]), JSON.stringify(r.members));
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@코덱스 안녕' }) });
+      const r2 = await idle(rid);
+      check('방에 없는 멤버는 안 부름', !r2.messages.some((x) => x.role === 'agent' && x.agent === 'codex') && r2.messages.some((x) => x.role === 'system' && /방에 없거나/.test(x.text)), 'called'); }
+    // 20. 같은 엔진 전문가 둘은 대화 기록을 따로 가짐
+    { const d = W('twins'); const rid = await newRoom('같은엔진', d, 'panel4');
+      const r0 = await room(rid);
+      check('패널로 방 만들기', JSON.stringify(r0.members) === JSON.stringify(['marcus', 'hunter', 'sage', 'ledger']) && r0.teamName === '4인 전문가 패널', JSON.stringify(r0.members));
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ agents: { sage: { noSandbox: true } } }) });
+      fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@마커스 시작' }) }); await idle(rid);
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@레저 숫자' }) }); await idle(rid);
+      const log = fs.readFileSync(LOG, 'utf8').split('===== ').filter(Boolean);
+      const lg = log.find((x) => x.includes('너는 레저'));
+      check('같은 엔진이어도 새 세션 + 패널 규칙 전달', lg && /resumed=false/.test(lg) && lg.includes('[이 패널의 공통 규칙]'), lg ? lg.slice(0, 120) : 'no ledger run'); }
+    // 21. 작업 기록장
+    { const a = (await api('/api/activity?limit=500')).body;
+      check('작업 기록장에 실행·승인·되돌리기 기록', a.some((x) => x.type === 'turn') && a.some((x) => x.type === 'revert') && a.some((x) => x.type === 'files') && a.some((x) => x.type === 'members'), [...new Set(a.map((x) => x.type))].join(',')); }
   } catch (e) { check('테스트 실행', false, e.stack); }
   srv.kill('SIGTERM'); await sleep(500);
   const fail = results.filter((r) => !r[1]).length;

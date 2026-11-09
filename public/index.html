@@ -463,7 +463,8 @@ const GLYPH = {
 const S = { agents:[], rooms:[], home:'', current:null, messages:[], pending:[], sideOpen:false, uploading:0, models:null, health:{} };
 const ROLE_NAME = { lead:'판단', builder:'구현', checker:'확인' };
 const roomAgent = (id) => (curRoom()?.agents?.[id]) || { enabled:true, role:'', model:'', effort:'' };
-const onAgents = () => S.agents.filter(a => roomAgent(a.id).enabled);
+const roomMemberList = () => { const r = curRoom(); const ids = (r && r.members) || ['claude','codex','opencode']; return ids.map(id => S.agents.find(a => a.id === id)).filter(Boolean); };
+const onAgents = () => roomMemberList().filter(a => roomAgent(a.id).enabled);
 const $ = (s, el=document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const agent = (id) => S.agents.find(a => a.id === id) || { id, name:id, color:'#888' };
@@ -489,7 +490,7 @@ function md(src){
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-    .replace(/(^|\s)@(클로드|코덱스|오픈코드|전체|claude|codex|opencode|gpt)/gi, '$1<span class="mention">@$2</span>');
+    .replace(/(^|\s)@([^\s@,.!?:;()<>]+)/g, (all, sp, nm) => aliasPairs().some(([,n]) => nm.toLowerCase().startsWith(String(n).toLowerCase())) ? `${sp}<span class="mention">@${nm}</span>` : all);
   const out = []; const lines = s.split('\n'); let i = 0;
   while (i < lines.length){
     let l = lines[i];
@@ -518,7 +519,8 @@ function md(src){
 function avatar(id, size){
   const a=agent(id); const sz = size?`;width:${size}px;height:${size}px`:'';
   if (a.avatar) return `<div class="av" style="background:var(--raised);overflow:hidden${sz}"><img src="/api/avatar/${id}?token=${encodeURIComponent(TOKEN)}&v=${a.avatar}" alt="" style="width:100%;height:100%;object-fit:cover"></div>`;
-  return `<div class="av" style="background:${a.color}${sz}">${GLYPH[id]||esc(a.name[0])}</div>`;
+  const inner = GLYPH[id] || (a.emoji ? `<span style="font-family:initial;font-size:1.05em;line-height:1">${esc(a.emoji)}</span>` : esc((a.name||'?')[0]));
+  return `<div class="av" style="background:${a.color}${sz}">${inner}</div>`;
 }
 
 function renderShell(){
@@ -530,6 +532,8 @@ function renderShell(){
       <button class="sidebtn" id="sbBrief">📰 브리핑<span id="briefDot"></span></button>
       <button class="sidebtn" id="sbGallery">🖼 결과물 갤러리</button>
       <button class="sidebtn" id="sbStats">📊 AI 성적표</button>
+      <button class="sidebtn" id="sbPersonas">👥 전문가·패널</button>
+      <button class="sidebtn" id="sbActivity">🧾 작업 기록</button>
     </div>
     <h6>대화방</h6>
     <div class="rooms" id="rooms"></div>
@@ -550,6 +554,8 @@ function renderShell(){
   $('#sbBrief').onclick = () => { closeSide(); openBriefings(); };
   $('#sbGallery').onclick = () => { closeSide(); openGallery(); };
   $('#sbStats').onclick = () => { closeSide(); openStats(); };
+  $('#sbPersonas').onclick = () => { closeSide(); openPersonas(); };
+  $('#sbActivity').onclick = () => { closeSide(); openActivity(); };
   $('#theme').onclick = toggleTheme;
   $('#verBtn').onclick = openUpdate;
   $('#scroll').addEventListener('scroll', () => {
@@ -589,6 +595,101 @@ function renderTop(){
   renderMemo();
   $('#titleBtn').onclick = $('#settingsBtn').onclick = () => openSettings();
   $('#folderChip').onclick = () => openSettings();
+}
+
+// ---------- 전문가·패널 ----------
+const ENG_LABEL = { claude:'클로드', codex:'코덱스', opencode:'오픈코드' };
+const PALETTE = ['#C96442','#1A9E7A','#6E5BD6','#B45309','#0E7490','#4D7C0F','#7C3AED','#DB2777','#2563EB','#57534E'];
+function openInvite(){
+  const r = curRoom(); if (!r) return;
+  const cur = roomMemberList().map(a=>a.id);
+  const rest = S.agents.filter(a => !cur.includes(a.id));
+  showModal(`<header><h2>전문가 초대</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
+    <div class="mbody">${rest.length ? rest.map(a=>`<label class="chk"><input type="checkbox" value="${a.id}">${avatar(a.id)}<span><b>${esc(a.name)}</b> <small style="color:var(--text3)">${esc(ENG_LABEL[a.engine]||'')}${a.description?' · '+esc(a.description):''}</small></span></label>`).join('') : '<p style="color:var(--text3)">모든 전문가가 이미 방에 있어요.</p>'}
+      <div style="margin-top:10px"><button class="linkbtn" id="mkNew">＋ 새 전문가 만들기</button></div></div>
+    <footer><button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">초대</button></footer>`);
+  $('#mClose').onclick = $('#mCancel').onclick = closeOverlays;
+  $('#mkNew').onclick = () => editPersona(null, () => openInvite());
+  $('#mOk').onclick = async () => {
+    const add = [...$('#modal').querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value); if (!add.length) return closeOverlays();
+    try { upsertRoom(await api('/api/rooms/'+r.id, { method:'PATCH', body:JSON.stringify({ members:[...cur, ...add] }) })); closeOverlays(); renderPanel(); renderComposer(); } catch(e){ toast(e.message); }
+  };
+}
+function openPersonas(tab){
+  tab = tab || 'p';
+  showModal(`<header><h2>전문가·패널</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
+    <div class="mbody"><div class="seg" style="margin-bottom:10px"><button data-t="p" class="${tab==='p'?'on':''}">전문가 ${S.agents.length}</button><button data-t="t" class="${tab==='t'?'on':''}">패널 ${(S.teams||[]).length}</button></div>
+    ${tab==='p' ? S.agents.map(a=>`<div class="mcard" style="margin:8px 0"><div style="display:flex;align-items:center;gap:10px">${avatar(a.id)}<div style="flex:1;min-width:0"><b>${esc(a.name)}</b> <small style="color:var(--text3)">${esc(ENG_LABEL[a.engine]||'')}${a.model?' · '+esc(a.model):''}${a.builtin?' · 기본':''}</small><div style="font-size:12.5px;color:var(--text2)">${esc(a.description||'')}</div></div><button class="linkbtn" data-edit="${a.id}">고치기</button></div></div>`).join('') + '<button class="btn sm primary" id="newP" style="margin-top:6px">＋ 새 전문가</button>'
+      : (S.teams||[]).map(t=>`<div class="mcard" style="margin:8px 0"><div style="display:flex;align-items:center;gap:8px"><div style="flex:1;min-width:0"><b>${esc(t.name)}</b><div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">${t.personaIds.map(id=>avatar(id,22)).join('')}</div>${t.instructions?`<div style="font-size:12.5px;color:var(--text2);margin-top:6px">${esc(t.instructions)}</div>`:''}</div><button class="linkbtn" data-tedit="${t.id}">고치기</button></div></div>`).join('') + '<button class="btn sm primary" id="newT" style="margin-top:6px">＋ 새 패널</button>'}
+    </div>`);
+  $('#mClose').onclick = closeOverlays;
+  $('#modal').querySelectorAll('[data-t]').forEach(b => b.onclick = () => openPersonas(b.dataset.t));
+  $('#modal').querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editPersona(b.dataset.edit, () => openPersonas('p')));
+  $('#modal').querySelectorAll('[data-tedit]').forEach(b => b.onclick = () => editTeam(b.dataset.tedit));
+  if ($('#newP')) $('#newP').onclick = () => editPersona(null, () => openPersonas('p'));
+  if ($('#newT')) $('#newT').onclick = () => editTeam(null);
+}
+async function editPersona(id, back){
+  if (!S.models) { try { S.models = await api('/api/models'); } catch {} }
+  const a = id ? S.agents.find(x=>x.id===id) : { name:'', emoji:'', color:PALETTE[(S.agents.length)%PALETTE.length], engine:'opencode', model:'', effort:'', description:'', systemPrompt:'' };
+  const d = { ...a };
+  const draw = () => {
+    const cat = (S.models||{})[d.engine] || { models:[{id:'',name:'기본'}], efforts:[] };
+    const known = cat.models.some(x=>x.id===d.model);
+    showModal(`<header><h2>${id?'전문가 고치기':'새 전문가'}</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
+      <div class="mbody">
+        <div style="display:flex;gap:8px"><div class="field" style="flex:1"><label>이름 (@로 부를 이름)</label><input id="pName" value="${esc(d.name)}" placeholder="예: 뮤즈"></div><div class="field" style="width:90px"><label>이모지</label><input id="pEmoji" value="${esc(d.emoji||'')}" placeholder="🎨" maxlength="4"></div></div>
+        <div class="field"><label>색</label><div style="display:flex;gap:6px;flex-wrap:wrap">${PALETTE.map(c=>`<button data-c="${c}" style="width:28px;height:28px;border-radius:8px;background:${c};outline:${d.color===c?'3px solid var(--text)':'none'};outline-offset:2px"></button>`).join('')}</div></div>
+        <div class="field"><label>한 줄 소개 (다른 AI들에게도 보여요)</label><input id="pDesc" value="${esc(d.description||'')}" placeholder="예: 아이디어 발산 · 엉뚱한 관점"></div>
+        <div class="field"><label>정체성·전문 분야 (지시문)</label><textarea class="reason" id="pPrompt" style="min-height:110px" placeholder="너는 ○○야. 무엇을 잘하고, 어떤 관점으로 말하고, 무엇은 하지 않는다.">${esc(d.systemPrompt||'')}</textarea></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <div class="field"><label>엔진</label><select id="pEng" ${a.builtin?'disabled':''}>${Object.entries(ENG_LABEL).map(([k,v])=>`<option value="${k}" ${d.engine===k?'selected':''}>${v}</option>`).join('')}</select></div>
+          <div class="field"><label>모델</label><select id="pModel">${cat.models.map(x=>`<option value="${esc(x.id)}" ${x.id===d.model?'selected':''}>${esc(x.name)}</option>`).join('')}${!known&&d.model?`<option value="${esc(d.model)}" selected>${esc(d.model)}</option>`:''}<option value="__custom">직접 입력…</option></select></div>
+          <div class="field"><label>추론 강도</label><select id="pEff"><option value="">기본</option>${(cat.efforts||[]).map(e=>`<option ${e===d.effort?'selected':''}>${e}</option>`).join('')}</select></div>
+        </div>
+        <p style="font-size:12.5px;color:var(--text3);margin:4px 0 0">오픈코드 엔진은 모델만 바꾸면 다른 회사 AI가 돼요. 목록에 없는 모델은 우분투에서 <code>opencode auth login</code>으로 키를 등록하면 나타나요.</p>
+      </div>
+      <footer>${id && !a.builtin ? '<button class="btn danger" id="pDel" style="margin-right:auto">삭제</button>' : ''}<button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">저장</button></footer>`);
+    const keep = () => { d.name=$('#pName').value; d.emoji=$('#pEmoji').value; d.description=$('#pDesc').value; d.systemPrompt=$('#pPrompt').value; d.effort=$('#pEff').value; };
+    $('#mClose').onclick = $('#mCancel').onclick = () => back ? back() : closeOverlays();
+    $('#modal').querySelectorAll('[data-c]').forEach(b => b.onclick = () => { keep(); d.color = b.dataset.c; draw(); });
+    $('#pEng').onchange = (e) => { keep(); d.engine = e.target.value; d.model=''; d.effort=''; draw(); };
+    $('#pModel').onchange = (e) => { keep(); let v = e.target.value; if (v==='__custom'){ v = (window.prompt('모델 이름 (예: provider/model)', d.model||'')||'').trim(); } d.model = v; d.effort=''; draw(); };
+    if ($('#pDel')) $('#pDel').onclick = async () => { if (!confirm2('pDel')) return; try { await api('/api/personas', { method:'POST', body:JSON.stringify({ remove:id }) }); await reloadAgents(); back ? back() : closeOverlays(); } catch(e){ toast(e.message); } };
+    $('#mOk').onclick = async () => { keep(); try { await api('/api/personas', { method:'POST', body:JSON.stringify({ id, ...d }) }); await reloadAgents(); toast('저장했어요'); back ? back() : closeOverlays(); } catch(e){ toast(e.message); } };
+  };
+  draw();
+}
+function confirm2(btnId){ const b = $('#'+btnId); if (b.dataset.armed) return true; b.dataset.armed='1'; b.textContent='한 번 더 누르면 삭제'; setTimeout(()=>{ if (b.isConnected){ delete b.dataset.armed; b.textContent='삭제'; } }, 3000); return false; }
+function editTeam(id){
+  const t = id ? (S.teams||[]).find(x=>x.id===id) : { name:'', description:'', instructions:'', personaIds:[] };
+  showModal(`<header><h2>${id?'패널 고치기':'새 패널'}</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
+    <div class="mbody">
+      <div class="field"><label>패널 이름</label><input id="tName" value="${esc(t.name)}" placeholder="예: 세미나 준비팀"></div>
+      <div class="field"><label>멤버 (말하는 순서대로)</label>${S.agents.map(a=>`<label class="chk"><input type="checkbox" value="${a.id}" ${t.personaIds.includes(a.id)?'checked':''}>${avatar(a.id)}<span>${esc(a.name)} <small style="color:var(--text3)">${esc(a.description||ENG_LABEL[a.engine]||'')}</small></span></label>`).join('')}</div>
+      <div class="field"><label>패널 공통 규칙 (모든 멤버에게 전달)</label><textarea class="reason" id="tInst" placeholder="예: 각자 전문 분야로만 말하고, 마지막 정리는 마커스가 해.">${esc(t.instructions||'')}</textarea></div>
+    </div>
+    <footer>${id?'<button class="btn danger" id="tDel" style="margin-right:auto">삭제</button>':''}<button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">저장</button></footer>`);
+  $('#mClose').onclick = $('#mCancel').onclick = () => openPersonas('t');
+  if ($('#tDel')) $('#tDel').onclick = async () => { if (!confirm2('tDel')) return; await api('/api/teams', { method:'POST', body:JSON.stringify({ remove:id }) }); await reloadAgents(); openPersonas('t'); };
+  $('#mOk').onclick = async () => {
+    const ids = [...$('#modal').querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value);
+    try { await api('/api/teams', { method:'POST', body:JSON.stringify({ id, name:$('#tName').value, instructions:$('#tInst').value, personaIds:ids }) }); await reloadAgents(); openPersonas('t'); } catch(e){ toast(e.message); }
+  };
+}
+
+// ---------- 작업 기록장 ----------
+const ACT_LABEL = { turn:'💬 답변', command:'⌨️ 명령', edit:'✏️ 수정', files:'📁 파일 변경', approve:'✅ 승인', reject:'↩️ 반려', revert:'⏪ 되돌리기', 'undo-revert':'⏩ 되돌리기 취소', members:'👥 멤버', manager:'✉️ 관리자' };
+async function openActivity(onlyRoom){
+  const rid = onlyRoom && S.current ? S.current : '';
+  showModal(`<header><h2>작업 기록</h2><button class="iconbtn" id="mClose">${I.x}</button></header><div class="mbody" id="actBody" style="min-height:140px"><span class="spin"></span></div>`);
+  $('#mClose').onclick = closeOverlays; $('#modal').style.width = 'min(820px,calc(100vw - 32px))';
+  try {
+    const list = await api('/api/activity?limit=400' + (rid ? '&room='+rid : ''));
+    $('#actBody').innerHTML = `<div class="seg" style="margin-bottom:10px"><button data-a="room" class="${rid?'on':''}" ${S.current?'':'disabled'}>이 방만</button><button data-a="all" class="${rid?'':'on'}">모든 방</button></div>` +
+      (list.length ? `<table class="stt" style="font-size:12.5px"><tbody>${list.map(x=>`<tr><td style="white-space:nowrap;color:var(--text3)">${new Date(x.ts).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'})}</td><td style="text-align:left;white-space:nowrap">${ACT_LABEL[x.type]||x.type}</td><td style="text-align:left;white-space:nowrap">${x.memberName?`<b style="color:${agent(x.member).color}">${esc(x.memberName)}</b>`:'나'}</td><td style="text-align:left;word-break:break-all;font-family:var(--mono);font-size:11.5px">${esc(x.detail)}</td>${rid?'':`<td style="text-align:left;color:var(--text3);white-space:nowrap">${esc(x.roomTitle||'')}</td>`}</tr>`).join('')}</tbody></table>` : '<div style="color:var(--text3)">아직 기록이 없어요.</div>');
+    $('#actBody').querySelectorAll('[data-a]').forEach(b => b.onclick = () => openActivity(b.dataset.a==='room'));
+  } catch(e){ toast(e.message); }
 }
 
 // ---------- 관리자 우편함 ----------
@@ -763,7 +864,7 @@ function fmtLeft(ms){
 }
 function fmtTok(n){ return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'k' : String(n||0); }
 function memberState(r, id){
-  const a = agent(id), ra = roomAgent(id), h = S.health[id], u = (S.usage||{})[id] || {};
+  const a = agent(id), ra = roomAgent(id), h = S.health[a.engine], u = (S.usage||{})[a.engine] || {};
   if (!ra.enabled) return ['s-idle','빠짐'];
   if (!a.available) return ['s-bad','설치 안 됨'];
   if (r.busy === id) return ['s-work','작업 중'];
@@ -773,18 +874,20 @@ function memberState(r, id){
   return ['s-idle','대기'];
 }
 function memberCard(r, a){
-  const ra = roomAgent(a.id), u = (S.usage||{})[a.id] || {}, h = S.health[a.id];
+  const ra = roomAgent(a.id), u = (S.usage||{})[a.engine] || {}, h = S.health[a.engine];
   const [sc, st] = memberState(r, a.id);
-  const cat = (S.models||{})[a.id]; const mname = ra.model ? ((cat && (cat.models.find(x=>x.id===ra.model)||{}).name) || ra.model) : '기본 모델';
+  const cat = (S.models||{})[a.engine]; const mname = ra.model ? ((cat && (cat.models.find(x=>x.id===ra.model)||{}).name) || ra.model) : '기본 모델';
   const bars = (u.windows||[]).map(w => { const pct = Math.round((w.util||0)*100); const cls = pct >= 95 ? 'crit' : pct >= 80 ? 'warn' : '';
     return `<div class="ubar ${cls}"><div class="l"><span>${esc(w.label)}</span><span>${pct}%${w.resetsAt && pct >= 50 ? ' · '+fmtLeft(w.resetsAt) : ''}</span></div><div class="t"><i style="width:${Math.min(100,pct)}%"></i></div></div>`; }).join('');
   const pills = [ra.role ? `<span class="pill role">${ROLE_NAME[ra.role]}</span>` : '',
     u.tokensToday && u.day === new Date().toLocaleDateString('sv-SE') ? `<span class="pill">오늘 ${fmtTok(u.tokensToday)} 토큰</span>` : '',
     h && h.ok === false ? `<span class="pill" style="color:var(--err)">${esc(h.text)}</span>` : '',
     h && h.sandbox === false ? `<span class="pill">${ra.noSandbox ? '샌드박스 없이 · 스냅샷 보호' : '샌드박스 안 됨 · 실행 막힘'}</span>` : ''].join('');
-  const noBars = !(u.windows||[]).length ? `<div class="ubar"><div class="l"><span>${a.id==='opencode' ? '무료 모델 · 한도 없음' : '한도 정보는 첫 답변 뒤에 보여요'}</span></div></div>` : '';
+  const noBars = !(u.windows||[]).length ? `<div class="ubar"><div class="l"><span>${a.engine==='opencode' ? '오픈코드 모델 · 한도는 제공사 기준' : '한도 정보는 첫 답변 뒤에 보여요'}</span></div></div>` : '';
+  const engName = { claude:'클로드', codex:'코덱스', opencode:'오픈코드' }[a.engine] || a.engine;
   return `<div class="mem ${sc==='s-work'?'work':''} ${ra.enabled?'':'off'}" data-mem="${a.id}">
-    <div class="mh">${avatar(a.id)}<div style="min-width:0"><b>${esc(a.name)}</b><div class="sub">${esc(mname)}${ra.effort?' · '+esc(ra.effort):''}</div></div><span class="state ${sc}">${st}</span></div>
+    <div class="mh">${avatar(a.id)}<div style="min-width:0"><b>${esc(a.name)}</b><div class="sub">${a.builtin?'':esc(engName)+' · '}${esc(mname)}${ra.effort?' · '+esc(ra.effort):''}</div></div><span class="state ${sc}">${st}</span></div>
+    ${a.description ? `<div style="font-size:12.5px;color:var(--text2);margin-top:6px">${esc(a.description)}</div>` : ''}
     ${pills.trim() ? `<div class="meta">${pills}</div>` : ''}${bars || noBars}
     ${h && h.sandbox === false ? `<div class="wr"><span>샌드박스 없이 허용<br><small style="color:var(--text3)">이 기기에선 격리가 안 돼요. 켜면 스냅샷 보호로 실행</small></span><button class="switch ${ra.noSandbox?'on':''}" data-nosb="${a.id}"></button></div>` : ''}
     <div class="wr"><span>작성 권한</span><button class="switch ${r.writer===a.id?'on':''}" data-wr="${a.id}" ${ra.enabled?'':'disabled'} title="이 AI만 파일을 고칠 수 있어요"></button></div>
@@ -797,7 +900,7 @@ function renderPanel(){
   const sets = S.messages.filter(m => m.role==='agent' && m.changes && m.changes.length);
   const memN = (r.memory||'').split('\n').filter(x=>x.trim()).length;
   el.innerHTML = `<div class="ptabs"><button data-tab="members" class="${S.panelTab==='members'?'on':''}">멤버</button><button data-tab="memory" class="${S.panelTab==='memory'?'on':''}">기억${memN?' '+memN:''}</button><button data-tab="ideas" class="${S.panelTab==='ideas'?'on':''}">아이디어${(r.ideas||[]).length?' '+r.ideas.length:''}</button><button data-tab="results" class="${S.panelTab==='results'?'on':''}">결과물${sets.length?' '+sets.length:''}</button></div>
-    <div class="pbody">${S.panelTab==='members' ? S.agents.map(a => memberCard(r, a)).join('') + `<div style="padding:4px 16px;font-size:12px;color:var(--text3)">카드를 누르면 모델·역할을 바꿀 수 있어요</div>` : S.panelTab==='memory' ? memoryHTML(r) : S.panelTab==='ideas' ? ideasHTML(r) : resultsHTML(r)}</div>`;
+    <div class="pbody">${S.panelTab==='members' ? (r.teamName ? `<div class="memhd"><span>패널: <b>${esc(r.teamName)}</b></span></div>` : '') + roomMemberList().map(a => memberCard(r, a)).join('') + `<div style="display:flex;gap:6px;margin:6px 12px"><button class="btn sm" id="inviteBtn">＋ 전문가 초대</button><button class="btn sm" id="personaMgr">전문가·패널 관리</button></div><div style="padding:4px 16px;font-size:12px;color:var(--text3)">카드를 누르면 모델·역할을 바꿀 수 있어요</div>` : S.panelTab==='memory' ? memoryHTML(r) : S.panelTab==='ideas' ? ideasHTML(r) : resultsHTML(r)}</div>`;
   el.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { S.panelTab = b.dataset.tab; renderPanel(); });
   el.querySelectorAll('[data-mem]').forEach(c => c.onclick = (e) => { if (e.target.closest('[data-wr],[data-nosb]')) return; openAgents(); });
   el.querySelectorAll('[data-nosb]').forEach(b => b.onclick = async (e) => {
@@ -809,6 +912,8 @@ function renderPanel(){
     try { await api('/api/rooms/'+r.id, { method:'PATCH', body:JSON.stringify({ writer: r.writer===id ? null : id }) }); } catch(err){ toast(err.message); }
   });
   if (S.panelTab === 'results') bindResults(el);
+  if ($('#inviteBtn')) $('#inviteBtn').onclick = openInvite;
+  if ($('#personaMgr')) $('#personaMgr').onclick = () => openPersonas();
   if (S.panelTab === 'memory') bindMemory(el, r);
   if (S.panelTab === 'ideas') bindIdeas(el, r);
 }
@@ -1072,10 +1177,16 @@ function completeMention(key){
   const p = q.start + key.length + 2; t.setSelectionRange(p,p); t.focus();
   $('#mentions').classList.remove('show'); autosize(); updateSend();
 }
-const ALIAS = { claude:['클로드','claude','클로'], codex:['코덱스','codex','gpt','지피티'], opencode:['오픈코드','opencode','oc'], all:['전체','all','모두'] };
+const ENGINE_ALIAS = { claude:['claude','클로'], codex:['codex','gpt','지피티'], opencode:['opencode','oc'] };
+function aliasPairs(){
+  const out = [];
+  for (const a of S.agents){ out.push([a.id, a.name]); for (const x of ENGINE_ALIAS[a.id]||[]) out.push([a.id, x]); }
+  for (const x of ['전체','all','모두']) out.push(['all', x]);
+  return out.sort((x,y) => y[1].length - x[1].length);
+}
 function mentionsIn(text){
-  const out = []; const re = /@([^\s@,.!?:;()\[\]"'`]+)/g; let m;
-  while ((m = re.exec(text))){ const t = m[1].toLowerCase(); for (const [id, ns] of Object.entries(ALIAS)) if (ns.some(n => t.startsWith(n.toLowerCase()))) { if (!out.includes(id)) out.push(id); break; } }
+  const out = []; const re = /@([^\s@,.!?:;()\[\]"'`]+)/g; let m; const pairs = aliasPairs();
+  while ((m = re.exec(text))){ const t = m[1].toLowerCase(); for (const [id, n] of pairs) if (t.startsWith(String(n).toLowerCase())) { if (!out.includes(id)) out.push(id); break; } }
   return out;
 }
 function updateTarget(){
@@ -1124,6 +1235,9 @@ const COMMANDS = [
   { c:'/갤러리', d:'모든 방의 결과물 모아보기', run:()=>openGallery() },
   { c:'/성적표', d:'AI별 답·실패·승인 기록', run:()=>openStats() },
   { c:'/브리핑', d:'아침 브리핑·주간 회고 보기', run:()=>openBriefings() },
+  { c:'/초대', d:'이 방에 전문가 초대', run:()=>openInvite() },
+  { c:'/전문가', d:'전문가·패널 만들기·고치기', run:()=>openPersonas() },
+  { c:'/기록', d:'작업 기록장 (명령·파일·승인)', run:()=>openActivity(true) },
 ];
 let cSel = 0;
 function cmdMatches(){
@@ -1243,6 +1357,7 @@ function openNewRoom(){
   showModal(`<header><h2>새 방</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
     <div class="mbody">
       <div class="field"><label>방 이름</label><input id="nTitle" placeholder="예: AMS 대시보드 개선"></div>
+      <div class="field"><label>패널 (들어올 멤버)</label><select id="nTeam">${(S.teams||[]).map(t=>`<option value="${t.id}" ${t.id==='basic'?'selected':''}>${esc(t.name)} — ${t.personaIds.map(id=>esc(agent(id).name)).join(', ')}</option>`).join('')}</select></div>
       <div class="field"><label>작업 폴더</label>${fsPicker(S.home, p => picked = p)}</div>
     </div>
     <footer><button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">만들기</button></footer>`);
@@ -1250,7 +1365,7 @@ function openNewRoom(){
   setTimeout(()=>$('#nTitle').focus(), 50);
   $('#mOk').onclick = async () => {
     try {
-      const r = await api('/api/rooms', { method:'POST', body:JSON.stringify({ title:$('#nTitle').value, cwd:picked }) });
+      const r = await api('/api/rooms', { method:'POST', body:JSON.stringify({ title:$('#nTitle').value, cwd:picked, teamId:$('#nTeam') ? $('#nTeam').value : undefined }) });
       upsertRoom(r); closeOverlays(); openRoom(r.id);
     } catch(e){ toast(e.message); }
   };
@@ -1328,7 +1443,7 @@ function confirmRevert(msgId){
 
 // ---------- AI 설정 ----------
 async function reloadAgents(){
-  const st = await api('/api/state'); S.agents = st.agents; S.version = st.version;
+  const st = await api('/api/state'); S.agents = st.agents; S.version = st.version; S.teams = st.teams||[];
   renderSide(); renderTop(); renderComposer(); if (S.messages.length) renderThread();
 }
 async function refreshHealth(force){
@@ -1341,10 +1456,10 @@ async function openAgents(){
   try { if (!S.models) S.models = await api('/api/models'); } catch(e){ toast(e.message); }
   refreshHealth(true).then(() => { if ($('#modal').classList.contains('show') && $('#agentCards')) drawStatus(); });
   const draft = JSON.parse(JSON.stringify(r.agents || {}));
-  for (const a of S.agents) draft[a.id] = draft[a.id] || { enabled:true, role:'', model:'', effort:'' };
+  for (const a of roomMemberList()) draft[a.id] = draft[a.id] || { enabled:true, role:'', model:'', effort:'' };
   const M = S.models || {};
   const card = (a) => {
-    const d = draft[a.id], cat = M[a.id] || { models:[{id:'',name:'기본'}], efforts:[] };
+    const d = draft[a.id], cat = M[a.engine] || { models:[{id:'',name:'기본'}], efforts:[] };
     const known = cat.models.some(x=>x.id===d.model);
     const mm = cat.models.find(x=>x.id===d.model);
     const efforts = (mm && mm.efforts && mm.efforts.length) ? mm.efforts : cat.efforts;
@@ -1355,12 +1470,12 @@ async function openAgents(){
         <div><label>모델</label><select data-k="model">${cat.models.map(x=>`<option value="${esc(x.id)}" ${x.id===d.model?'selected':''}>${esc(x.name)}</option>`).join('')}${!known && d.model?`<option value="${esc(d.model)}" selected>${esc(d.model)}</option>`:''}<option value="__custom">직접 입력…</option></select></div>
         <div><label>추론 강도</label><select data-k="effort"><option value="">기본</option>${efforts.map(e=>`<option ${e===d.effort?'selected':''}>${e}</option>`).join('')}</select></div>
       </div>
-      <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:8px"><button class="linkbtn muted" data-avatar="${a.id}">아이콘 바꾸기</button>${a.avatar?`<button class="linkbtn muted" data-avatar-reset="${a.id}">기본 아이콘</button>`:''}<button class="linkbtn muted" data-reset="${a.id}">${I.retry} 기억 초기화</button></div>
+      <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:8px;flex-wrap:wrap"><button class="linkbtn muted" data-kick="${a.id}">방에서 내보내기</button><button class="linkbtn muted" data-avatar="${a.id}">아이콘 바꾸기</button>${a.avatar?`<button class="linkbtn muted" data-avatar-reset="${a.id}">기본 아이콘</button>`:''}<button class="linkbtn muted" data-reset="${a.id}">${I.retry} 기억 초기화</button></div>
     </div>`;
   };
   const draw = () => {
     $('#modal').innerHTML = `<header><h2>AI 설정</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
-      <div class="mbody" id="agentCards"><p style="margin:0;color:var(--text3);font-size:13px">모델을 바꿔도 이 방 대화는 이어서 넘겨줘요. 역할은 각 AI에게 지시로 붙어요.</p>${S.agents.map(card).join('')}</div>
+      <div class="mbody" id="agentCards"><p style="margin:0;color:var(--text3);font-size:13px">모델을 바꿔도 이 방 대화는 이어서 넘겨줘요. 역할은 각 AI에게 지시로 붙어요.</p>${roomMemberList().map(card).join('')}</div>
       <footer><button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">저장</button></footer>`;
     $('#mClose').onclick = $('#mCancel').onclick = closeOverlays;
     drawStatus();
@@ -1374,6 +1489,11 @@ async function openAgents(){
         draft[id].model = v; draft[id].effort = ''; draw();
       };
       c.querySelector('[data-k=effort]').onchange = (e) => { draft[id].effort = e.target.value; };
+      c.querySelector('[data-kick]').onclick = async () => {
+        const left = (curRoom().members || roomMemberList().map(x=>x.id)).filter(x => x !== id);
+        if (!left.length) return toast('적어도 한 명은 남아 있어야 해요');
+        try { upsertRoom(await api('/api/rooms/'+r.id, { method:'PATCH', body:JSON.stringify({ members:left }) })); closeOverlays(); renderPanel(); renderComposer(); } catch(e){ toast(e.message); }
+      };
       c.querySelector('[data-avatar]').onclick = () => {
         const inp = document.createElement('input'); inp.type='file'; inp.accept='image/*';
         inp.onchange = async () => { const f = inp.files[0]; if (!f) return; if (f.size > 3*1024*1024) return toast('3MB 이하 이미지만 돼요');
@@ -1398,7 +1518,7 @@ async function openAgents(){
 function drawStatus(){
   for (const a of S.agents){
     const el = document.querySelector(`[data-st="${a.id}"]`); if (!el) continue;
-    const h = S.health[a.id];
+    const h = S.health[a.engine];
     el.className = 'st ' + (!h ? '' : h.ok ? 'ok' : h.ok===false ? 'bad' : '');
     el.querySelector('span').textContent = h ? h.text : '확인 중…';
   }
@@ -1507,6 +1627,8 @@ function connect(){
       const before = sig(S.rooms.find(x=>x.id===ev.room.id));
       upsertRoom(ev.room); renderSide();
       if (ev.room.id === S.current){ renderTop(); renderMemo(); if (before !== sig(ev.room)) renderComposer(); else { updateBusy(); updateTarget(); } renderPanel(); }
+    } else if (ev.type === 'personas'){
+      reloadAgents().catch(()=>{});
     } else if (ev.type === 'briefing'){
       S.briefNew = true; const dot = $('#briefDot'); if (dot) dot.className = 'dot';
       if (document.hidden) showNotify(ev.briefing.kind==='weekly'?'주간 회고':'아침 브리핑', ev.briefing.text.split('\n')[0]);
@@ -1539,7 +1661,7 @@ async function init(){
   applyTheme();
   S.openSteps = new Set();
   if (!TOKEN){ renderLogin(); return; }
-  try { const st = await api('/api/state'); S.agents=st.agents; S.rooms=st.rooms; S.home=st.home; S.version=st.version; }
+  try { const st = await api('/api/state'); S.agents=st.agents; S.rooms=st.rooms; S.home=st.home; S.version=st.version; S.teams=st.teams||[]; }
   catch(e){ if (e.message!=='auth'){ $('#app').innerHTML = `<div class="login"><h1>서버에 연결할 수 없어요</h1><p>${esc(e.message)}</p></div>`; } return; }
   renderShell(); connect();
   refreshHealth();
