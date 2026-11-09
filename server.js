@@ -15,7 +15,7 @@ const ROOMS_DIR = path.join(DATA, 'rooms');
 const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
-const VERSION = '0.6.0';
+const VERSION = '0.6.1';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS]) fs.mkdirSync(d, { recursive: true });
 

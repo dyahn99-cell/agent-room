@@ -36,7 +36,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15
 button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
 input,textarea,select{font:inherit;color:inherit}
 svg{display:block}
-.app{display:flex;height:100dvh}
+.app{display:flex;position:fixed;left:0;right:0;top:var(--app-top,0px);height:var(--app-h,100dvh)}
+html,body{overscroll-behavior:none}
 
 /* ---- sidebar ---- */
 .side{width:280px;flex:none;background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:14px 10px 10px;transition:transform .25s ease}
@@ -364,6 +365,24 @@ textarea.reason{width:100%;min-height:90px;border:1px solid var(--line2);border-
 
 <script>
 'use strict';
+// ---------- 화면 높이: 키보드·브라우저 바가 바뀌어도 실제 보이는 영역에 맞춤 ----------
+(function fitViewport(){
+  const vv = window.visualViewport;
+  const apply = () => {
+    const h = vv ? vv.height : window.innerHeight;
+    const top = vv ? vv.offsetTop : 0;
+    document.documentElement.style.setProperty('--app-h', Math.round(h) + 'px');
+    document.documentElement.style.setProperty('--app-top', Math.round(top) + 'px');
+    if (window.scrollY) window.scrollTo(0, 0);
+  };
+  apply();
+  if (vv){ vv.addEventListener('resize', apply); vv.addEventListener('scroll', apply); }
+  window.addEventListener('resize', apply);
+  window.addEventListener('orientationchange', () => setTimeout(apply, 300));
+  document.addEventListener('focusin', () => setTimeout(apply, 350));
+  document.addEventListener('focusout', () => setTimeout(apply, 350));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(apply, 200); });
+})();
 // ---------- 토큰 ----------
 const store = {
   get(k){ try{ return localStorage.getItem(k) }catch{ return null } },
@@ -636,7 +655,8 @@ function renderPanel(){
   if (S.panelTab === 'memory') bindMemory(el, r);
 }
 function memoryHTML(r){
-  const by = r.memoryBy ? (r.memoryBy==='user' ? '내가' : esc(agent(r.memoryBy).name)+'이(가)') : '';
+  const nm = r.memoryBy && r.memoryBy!=='user' ? agent(r.memoryBy).name : '';
+  const by = r.memoryBy ? (r.memoryBy==='user' ? '내가' : esc(nm) + (((nm.charCodeAt(nm.length-1)-0xac00)%28) > 0 ? '이' : '가')) : '';
   const hist = (r.memoryHistory||[]).slice().reverse();
   return `<div class="memhd"><span>AI들이 합의하면서 스스로 정리해 가요. 매번 모든 AI에게 전달돼요.</span></div>
     <div class="memdoc">${(r.memory||'').trim() ? `<div class="md">${md(r.memory)}</div>` : '<div style="color:var(--text3);font-size:13px">아직 합의한 내용이 없어요. 토론하거나 같이 정하면 여기에 쌓여요.</div>'}</div>
