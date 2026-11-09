@@ -15,7 +15,7 @@ const ROOMS_DIR = path.join(DATA, 'rooms');
 const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS]) fs.mkdirSync(d, { recursive: true });
 
@@ -161,6 +161,80 @@ async function checkHealth(force) {
   return h;
 }
 
+// ---------- 사용량 ----------
+const USAGE_FILE = path.join(DATA, 'usage.json');
+let usage = {};
+try { usage = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8')); } catch { }
+const today = () => new Date().toLocaleDateString('sv-SE');
+let usageTimer = null;
+function usageChanged() {
+  clearTimeout(usageTimer);
+  usageTimer = setTimeout(() => { try { fs.writeFileSync(USAGE_FILE, JSON.stringify(usage)); } catch { } broadcast({ type: 'usage', usage }); }, 300);
+}
+function setWindows(agentId, windows) {
+  const u = usage[agentId] || (usage[agentId] = {});
+  u.windows = windows; u.updatedAt = now(); usageChanged();
+}
+function addTokens(agentId, n) {
+  if (!n || !isFinite(n)) return;
+  const u = usage[agentId] || (usage[agentId] = {});
+  if (u.day !== today()) { u.day = today(); u.tokensToday = 0; }
+  u.tokensToday = (u.tokensToday || 0) + n; usageChanged();
+}
+// 한도에 걸린 AI: 초기화 시각 전까지 실행하지 않음
+function limitHit(agentId) {
+  const w = (usage[agentId] && usage[agentId].windows) || [];
+  const hit = w.find((x) => x.util >= 1 && x.resetsAt && x.resetsAt > now());
+  return hit || null;
+}
+function fmtReset(ms) {
+  const d = new Date(ms);
+  return d.toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+// 코덱스는 한도 정보를 자기 대화 기록 파일(rollout)에 남김
+function codexHome() { return process.env.CODEX_HOME || path.join(os.homedir(), '.codex'); }
+function findRollout(threadId) {
+  const base = path.join(codexHome(), 'sessions');
+  const stack = [base]; let found = null, guard = 0;
+  while (stack.length && guard++ < 5000) {
+    const d = stack.pop(); let ents = [];
+    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    for (const e of ents) {
+      const fp = path.join(d, e.name);
+      if (e.isDirectory()) stack.push(fp);
+      else if (e.name.includes(threadId) && e.name.endsWith('.jsonl')) { found = fp; break; }
+    }
+    if (found) break;
+  }
+  return found;
+}
+function readCodexLimits(threadId) {
+  const f = threadId && findRollout(threadId);
+  if (!f) return;
+  let lines = [];
+  try { const buf = fs.readFileSync(f, 'utf8'); lines = buf.slice(-400000).split('\n').reverse(); } catch { return; }
+  for (const l of lines) {
+    if (!l.includes('rate_limits')) continue;
+    let o; try { o = JSON.parse(l); } catch { continue; }
+    const p = o.payload || o.msg || o;
+    const rl = p.rate_limits || (p.info && p.info.rate_limits);
+    if (!rl) continue;
+    const win = (w, label) => {
+      if (!w) return null;
+      const pct = w.used_percent != null ? w.used_percent : w.usedPercent;
+      if (pct == null) return null;
+      let resetsAt = null;
+      if (w.resets_at) resetsAt = w.resets_at > 1e12 ? w.resets_at : w.resets_at * 1000;
+      else if (w.resets_in_seconds != null) resetsAt = (o.timestamp ? Date.parse(o.timestamp) : now()) + w.resets_in_seconds * 1000;
+      const mins = w.window_minutes || w.windowMinutes;
+      return { key: label, label: mins && mins <= 600 ? '5시간 한도' : mins ? '주간 한도' : label, util: pct / 100, resetsAt };
+    };
+    const ws = [win(rl.primary || rl.primary_window, '5시간 한도'), win(rl.secondary || rl.secondary_window, '주간 한도')].filter(Boolean);
+    if (ws.length) setWindows('codex', ws);
+    return;
+  }
+}
+
 // ---------- 방 저장 ----------
 const rooms = new Map();
 const saveTimers = new Map();
@@ -195,6 +269,7 @@ function roomSummary(r) {
     defaultAgent: r.defaultAgent, updatedAt: r.updatedAt,
     agents: Object.fromEntries(AGENT_IDS.map((a) => [a, ac(r, a)])),
     queue: runtime(r.id).queue.map((q) => q.agent),
+    lastAgent: r.lastAgent || null,
     busy: runtime(r.id).current ? runtime(r.id).current.agent : null,
     preview: last ? clip(last.text.replace(/\s+/g, ' '), 80) : '',
   };
@@ -406,6 +481,15 @@ const adapters = {
         if (e.type === 'content_block_delta' && e.delta && e.delta.type === 'text_delta' && e.delta.text) ctx.live(e.delta.text);
         return;
       }
+      if (ev.type === 'rate_limit_event' && ev.rate_limit_info) {
+        const uw = ev.rate_limit_info.unifiedWindows || {};
+        const ws = [];
+        if (uw.five_hour) ws.push({ key: '5h', label: '5시간 한도', util: uw.five_hour.utilization, resetsAt: uw.five_hour.resetsAt * 1000, status: uw.five_hour.status });
+        if (uw.seven_day) ws.push({ key: '7d', label: '주간 한도', util: uw.seven_day.utilization, resetsAt: uw.seven_day.resetsAt * 1000, status: uw.seven_day.status });
+        if (ws.length) setWindows('claude', ws);
+        return;
+      }
+      if (ev.type === 'result' && ev.usage) { const u = ev.usage; addTokens('claude', (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_creation_input_tokens || 0)); }
       if (ev.type === 'system' && ev.session_id) ctx.session(ev.session_id);
       else if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
         for (const b of ev.message.content) {
@@ -442,6 +526,7 @@ const adapters = {
     },
     handle(ev, ctx) {
       if (ev.type === 'thread.started' && ev.thread_id) return ctx.session(ev.thread_id);
+      if (ev.type === 'turn.completed' && ev.usage) { const u = ev.usage; addTokens('codex', (u.input_tokens || 0) - (u.cached_input_tokens || 0) + (u.output_tokens || 0)); }
       if (ev.type === 'error' || ev.type === 'turn.failed') return ctx.error((ev.error && ev.error.message) || ev.message || '실패했어요');
       const it = ev.item;
       if (it && /^item\./.test(ev.type)) {
@@ -482,6 +567,7 @@ const adapters = {
     handle(ev, ctx) {
       if (ev.sessionID) ctx.session(ev.sessionID);
       const p = ev.part || {};
+      if (ev.type === 'step_finish' && p.tokens) { const t = p.tokens; addTokens('opencode', (t.input || 0) + (t.output || 0) + (t.reasoning || 0)); }
       if (ev.type === 'text' && p.text) ctx.text(p.text, true);
       else if (ev.type === 'reasoning' && p.text) ctx.think(p.text);
       else if (ev.type === 'tool_use') {
@@ -566,6 +652,11 @@ async function runAgent(room, job, cur) {
   }
 
   if (!healthCache || now() - healthCache.at > 300000) { try { await checkHealth(true); } catch { } }
+  const lim = limitHit(agentId);
+  if (lim) {
+    msg.status = 'error'; msg.errorHint = `${a.name}의 ${lim.label}에 걸렸어요. ${fmtReset(lim.resetsAt)}에 초기화돼요. 그동안 다른 AI를 불러주세요.`; msg.text = '⚠️ ' + msg.errorHint;
+    pushMessage(room, msg, true); return;
+  }
   const h = healthCache && healthCache.data[agentId];
   if (h && h.ok === false) {
     msg.status = 'error'; msg.errorHint = `${a.name}: ${h.text}`; msg.text = '⚠️ ' + msg.errorHint;
@@ -672,6 +763,7 @@ async function runAgent(room, job, cur) {
     try { msg.changes = await changesSince(room, msg.checkpoint, msg.checkpointCwd); } catch { }
     if (!writer && msg.changes && msg.changes.length) msg.unexpected = true; // 읽기 전용인데 파일이 바뀜
   }
+  if (agentId === 'codex' && st.session) { try { readCodexLimits(st.session); } catch { } }
   msg.doneAt = now();
   pushMessage(room, msg, true);
 
@@ -825,6 +917,7 @@ const server = http.createServer(async (req, res) => {
       if (!modelCache || url.searchParams.get('refresh')) await loadModels();
       return send(res, 200, modelCache.data);
     }
+    if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usage);
     if (p === '/api/health' && req.method === 'GET') {
       return send(res, 200, await checkHealth(!!url.searchParams.get('force')));
     }

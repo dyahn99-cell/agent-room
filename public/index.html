@@ -224,6 +224,46 @@ textarea.inp::placeholder{color:var(--text3)}
 .conn{position:fixed;top:10px;left:50%;transform:translateX(-50%);background:var(--err);color:#fff;font-size:12.5px;padding:5px 12px;border-radius:999px;z-index:40;display:none}
 .conn.show{display:block}
 
+/* 0.4 멤버 패널 */
+.panel{width:310px;flex:none;border-left:1px solid var(--line);background:var(--side);display:flex;flex-direction:column;min-height:0}
+.ptabs{display:flex;gap:4px;padding:10px 12px 4px;flex:none}
+.ptabs button{flex:1;height:34px;border-radius:9px;font-size:13.5px;color:var(--text2);font-weight:600}
+.ptabs button.on{background:var(--surface);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.07)}
+.pbody{flex:1;overflow-y:auto;padding:2px 0 14px}
+.mem{background:var(--surface);border:1px solid var(--line);border-radius:14px;margin:8px 12px;padding:12px;cursor:pointer;transition:border-color .2s,box-shadow .2s}
+.mem:hover{border-color:var(--line2)}
+.mem.work{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));box-shadow:0 0 0 3px var(--accent-soft)}
+.mem.off{opacity:.55}
+.mh{display:flex;align-items:center;gap:10px}
+.mh .av{width:34px;height:34px;border-radius:10px}
+.mh b{font-size:15px;display:block}.mh .sub{font-size:12px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
+.state{font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:999px;margin-left:auto;white-space:nowrap}
+.s-idle{background:var(--raised);color:var(--text2)}.s-work{background:var(--accent-soft);color:var(--accent)}.s-bad{background:#F5DAD6;color:#A8392C}.s-q{background:#EEF2FF;color:#4F46E5}
+.meta{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+.pill{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--raised);color:var(--text2)}
+.pill.role{background:#EEF2FF;color:#4F46E5;font-weight:600}
+.ubar{margin-top:9px}.ubar .l{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;color:var(--text3);margin-bottom:3px}
+.ubar .t{height:6px;border-radius:99px;background:var(--raised);overflow:hidden}.ubar .t i{display:block;height:100%;border-radius:99px;background:var(--ok);transition:width .4s}
+.ubar.warn .t i{background:#D9822B}.ubar.crit .t i{background:var(--err)}.ubar.crit .l span:last-child{color:var(--err);font-weight:600}
+.wr{display:flex;align-items:center;gap:8px;margin-top:11px;padding-top:10px;border-top:1px solid var(--line);font-size:13px;color:var(--text2)}
+.wr .switch{margin-left:auto}
+.target{font-size:12.5px;color:var(--text2);display:flex;align-items:center;gap:4px;margin-bottom:7px;min-height:18px}
+.faces{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}
+.faces button{display:flex;align-items:center;gap:6px;padding:3px 10px 3px 3px;border-radius:999px;border:1px solid var(--line);font-size:13px;background:var(--surface);color:var(--text2)}
+.faces button.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
+.faces button.all{padding:3px 12px}
+.faces .av{width:24px;height:24px;border-radius:8px}
+.actbar{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center}
+.actbar a.btn{text-decoration:none}
+.actbar .btn.ok{background:var(--ok);border-color:var(--ok);color:#fff}
+.chsum{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:var(--text2)}
+.ptoggle{display:none}
+@media (max-width:1100px){
+  .panel{position:fixed;right:0;top:0;bottom:0;z-index:22;transform:translateX(100%);visibility:hidden;transition:transform .25s ease,visibility .25s;width:min(340px,92vw)}
+  .panel.open{transform:none;visibility:visible;box-shadow:-10px 0 40px rgba(0,0,0,.15)}
+  .ptoggle{display:grid}
+}
+
 /* 0.2 */
 .caret{display:inline-block;width:7px;height:1.05em;background:var(--accent);vertical-align:-2px;margin-left:2px;border-radius:1px;animation:blink 1s steps(2) infinite}
 @keyframes blink{50%{opacity:0}}
@@ -415,7 +455,7 @@ function renderShell(){
     <h6>대화방</h6>
     <div class="rooms" id="rooms"></div>
     <div class="side-foot">
-      <div class="agent-dots" id="agentDots"></div>
+      <div class="spacer"></div>
       <button id="verBtn" style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:5px;padding:3px 6px;border-radius:7px">v${esc(S.version||'')}${S.update&&S.update.behind?'<span style="background:var(--accent);color:#fff;border-radius:999px;padding:1px 7px;font-weight:700">업데이트</span>':''}</button>
       <button class="iconbtn" id="theme" title="테마">${I.moon}</button>
     </div>
@@ -424,7 +464,8 @@ function renderShell(){
     <div class="top" id="top"></div>
     <div class="scroll" id="scroll"><div id="thread"></div></div>
     <div class="composer-wrap" id="composerWrap"></div>
-  </main>`;
+  </main>
+  <aside class="panel" id="panel"></aside>`;
   $('#newRoom').onclick = () => openNewRoom();
   $('#theme').onclick = toggleTheme;
   $('#verBtn').onclick = openUpdate;
@@ -433,7 +474,7 @@ function renderShell(){
     S.stick = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   });
   $('#scrim').onclick = closeOverlays;
-  renderSide(); renderTop(); renderThread(); renderComposer();
+  renderSide(); renderTop(); renderThread(); renderComposer(); renderPanel();
 }
 
 function renderSide(){
@@ -444,7 +485,7 @@ function renderSide(){
       <div class="p">${esc(r.preview || shortPath(r.cwd))}</div>
     </button>`).join('') : `<div style="padding:10px;color:var(--text3);font-size:13px">아직 방이 없어요</div>`;
   el.querySelectorAll('.room-item').forEach(b => b.onclick = () => { openRoom(b.dataset.id); closeSide(); });
-  $('#agentDots').innerHTML = S.agents.map(a => { const h=S.health[a.id]; const bad = !a.available || (h && h.ok===false);
+  if ($('#agentDots')) $('#agentDots').innerHTML = S.agents.map(a => { const h=S.health[a.id]; const bad = !a.available || (h && h.ok===false);
     return `<span class="agent-dot ${!a.available?'off':''} ${bad?'bad':''}" title="${esc(h?h.text:(a.available?'설치됨':'설치 안 됨'))}"><i class="${h&&h.ok?'ok':''}" style="background:${a.color}"></i>${esc(a.name)}</span>`; }).join('');
 }
 
@@ -456,23 +497,65 @@ function renderTop(){
     <button class="title" id="titleBtn">${esc(r.title)}</button>
     <button class="chip folder" id="folderChip" title="${esc(r.cwd)}">${I.folder}<span>${esc(shortPath(r.cwd))}</span></button>
     <div class="spacer"></div>
-    <div class="writer" title="파일을 고칠 수 있는 AI (나머지는 읽기·검토만)">
-      <span class="lbl">작성 권한</span>
-      <button data-w="" class="${!r.writer?'on':''}">없음</button>
-      ${onAgents().map(a => `<button data-w="${a.id}" class="${r.writer===a.id?'on':''}"><i style="background:${a.color}"></i><span class="nm">${esc(a.name)}</span></button>`).join('')}
-    </div>
-    <button class="iconbtn" id="agentsBtn" title="AI 설정 (모델·역할)">${I.users}</button>
-    <button class="iconbtn" id="resultsBtn" title="결과물">${I.box}</button>
+    <button class="iconbtn ptoggle" id="panelBtn" title="멤버·결과물">${I.users}</button>
     <button class="iconbtn" id="settingsBtn" title="방 설정">${I.gear}</button>`;
-  $('#agentsBtn').onclick = openAgents;
-  $('#resultsBtn').onclick = openResults;
   $('#menuBtn').onclick = openSide;
+  $('#panelBtn').onclick = () => openPanel();
   $('#titleBtn').onclick = $('#settingsBtn').onclick = () => openSettings();
   $('#folderChip').onclick = () => openSettings();
-  el.querySelectorAll('.writer button').forEach(b => b.onclick = async () => {
-    const w = b.dataset.w || null;
-    try { await api('/api/rooms/'+r.id, { method:'PATCH', body:JSON.stringify({ writer:w }) }); } catch(e){ toast(e.message); }
+}
+
+// ---------- 오른쪽 패널: 멤버 / 결과물 ----------
+S.panelTab = 'members';
+function openPanel(tab){ if (tab) S.panelTab = tab; renderPanel(); $('#panel').classList.add('open'); $('#scrim').classList.add('show'); }
+function fmtLeft(ms){
+  const d = ms - Date.now(); if (d <= 0) return '곧 초기화';
+  const h = Math.floor(d/3600000), m = Math.floor(d%3600000/60000);
+  if (h >= 24) return `${Math.floor(h/24)}일 ${h%24}시간 뒤 초기화`;
+  return h ? `${h}시간 ${m}분 뒤 초기화` : `${m}분 뒤 초기화`;
+}
+function fmtTok(n){ return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'k' : String(n||0); }
+function memberState(r, id){
+  const a = agent(id), ra = roomAgent(id), h = S.health[id], u = (S.usage||{})[id] || {};
+  if (!ra.enabled) return ['s-idle','빠짐'];
+  if (!a.available) return ['s-bad','설치 안 됨'];
+  if (r.busy === id) return ['s-work','작업 중'];
+  if ((r.queue||[]).includes(id)) return ['s-q','차례 대기'];
+  if (h && h.ok === false) return ['s-bad','로그인 필요'];
+  if ((u.windows||[]).some(w => w.util >= 1 && w.resetsAt > Date.now())) return ['s-bad','한도 도달'];
+  return ['s-idle','대기'];
+}
+function memberCard(r, a){
+  const ra = roomAgent(a.id), u = (S.usage||{})[a.id] || {}, h = S.health[a.id];
+  const [sc, st] = memberState(r, a.id);
+  const cat = (S.models||{})[a.id]; const mname = ra.model ? ((cat && (cat.models.find(x=>x.id===ra.model)||{}).name) || ra.model) : '기본 모델';
+  const bars = (u.windows||[]).map(w => { const pct = Math.round((w.util||0)*100); const cls = pct >= 95 ? 'crit' : pct >= 80 ? 'warn' : '';
+    return `<div class="ubar ${cls}"><div class="l"><span>${esc(w.label)}</span><span>${pct}%${w.resetsAt && pct >= 50 ? ' · '+fmtLeft(w.resetsAt) : ''}</span></div><div class="t"><i style="width:${Math.min(100,pct)}%"></i></div></div>`; }).join('');
+  const pills = [ra.role ? `<span class="pill role">${ROLE_NAME[ra.role]}</span>` : '',
+    u.tokensToday && u.day === new Date().toLocaleDateString('sv-SE') ? `<span class="pill">오늘 ${fmtTok(u.tokensToday)} 토큰</span>` : '',
+    h && h.ok === false ? `<span class="pill" style="color:var(--err)">${esc(h.text)}</span>` : '',
+    h && /샌드박스 꺼짐/.test(h.text||'') ? '<span class="pill">샌드박스 꺼짐 · 되돌리기 보호</span>' : ''].join('');
+  const noBars = !(u.windows||[]).length ? `<div class="ubar"><div class="l"><span>${a.id==='opencode' ? '무료 모델 · 한도 없음' : '한도 정보는 첫 답변 뒤에 보여요'}</span></div></div>` : '';
+  return `<div class="mem ${sc==='s-work'?'work':''} ${ra.enabled?'':'off'}" data-mem="${a.id}">
+    <div class="mh">${avatar(a.id)}<div style="min-width:0"><b>${esc(a.name)}</b><div class="sub">${esc(mname)}${ra.effort?' · '+esc(ra.effort):''}</div></div><span class="state ${sc}">${st}</span></div>
+    ${pills.trim() ? `<div class="meta">${pills}</div>` : ''}${bars || noBars}
+    <div class="wr"><span>작성 권한</span><button class="switch ${r.writer===a.id?'on':''}" data-wr="${a.id}" ${ra.enabled?'':'disabled'} title="이 AI만 파일을 고칠 수 있어요"></button></div>
+  </div>`;
+}
+function renderPanel(){
+  const el = $('#panel'); if (!el) return;
+  const r = curRoom();
+  if (!r){ el.innerHTML = `<div style="padding:24px 16px;color:var(--text3);font-size:13px">방을 고르면 멤버가 보여요</div>`; return; }
+  const sets = S.messages.filter(m => m.role==='agent' && m.changes && m.changes.length);
+  el.innerHTML = `<div class="ptabs"><button data-tab="members" class="${S.panelTab==='members'?'on':''}">멤버</button><button data-tab="results" class="${S.panelTab==='results'?'on':''}">결과물${sets.length?' '+sets.length:''}</button></div>
+    <div class="pbody">${S.panelTab==='members' ? S.agents.map(a => memberCard(r, a)).join('') + `<div style="padding:4px 16px;font-size:12px;color:var(--text3)">카드를 누르면 모델·역할을 바꿀 수 있어요</div>` : resultsHTML(r)}</div>`;
+  el.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { S.panelTab = b.dataset.tab; renderPanel(); });
+  el.querySelectorAll('[data-mem]').forEach(c => c.onclick = (e) => { if (e.target.closest('[data-wr]')) return; openAgents(); });
+  el.querySelectorAll('[data-wr]').forEach(b => b.onclick = async (e) => {
+    e.stopPropagation(); const id = b.dataset.wr;
+    try { await api('/api/rooms/'+r.id, { method:'PATCH', body:JSON.stringify({ writer: r.writer===id ? null : id }) }); } catch(err){ toast(err.message); }
   });
+  if (S.panelTab === 'results') bindResults(el);
 }
 
 function stepIcon(k){ return I[k] || I.tool; }
@@ -508,8 +591,9 @@ function renderMsg(m){
     const add = m.changes.reduce((s,f)=>s+f.add,0), del = m.changes.reduce((s,f)=>s+f.del,0);
     const rv = m.review==='approved' ? '<span class="review ok">승인됨</span>' : m.review==='rejected' ? '<span class="review no">반려됨</span>' : `<button class="btn sm primary" data-approve="${m.id}">승인</button><button class="btn sm" data-reject="${m.id}">반려</button>`;
     const html = m.changes.find(f => f.status!=='D' && /\.html?$/i.test(f.path));
-    if (html) tail += `<div style="margin-top:8px"><a class="btn sm primary" target="_blank" rel="noopener" href="${viewUrl(S.current, html.path)}">${esc(html.path.split('/').pop())} 열어보기</a></div>`;
-    tail += `<div class="changes"><span style="color:var(--text3)">${I.edit}</span><span class="sum">파일 ${m.changes.length}개 변경</span><span class="add">+${add}</span><span class="del">−${del}</span><button class="linkbtn" data-diff="${m.id}">변경 내역</button><button class="linkbtn muted" data-revert="${m.id}">되돌리기</button><span class="spacer"></span>${rv}</div>`;
+    const rv2 = m.review==='approved' ? '<span class="review ok">승인됨</span>' : m.review==='rejected' ? '<span class="review no">반려됨</span>' : `<button class="btn sm ok" data-approve="${m.id}">승인</button><button class="btn sm" data-reject="${m.id}">반려</button>`;
+    tail += `<div class="chsum"><span style="color:var(--text3)">${I.edit}</span>파일 ${m.changes.length}개 변경 <span class="add">+${add}</span><span class="del">−${del}</span></div>
+      <div class="actbar">${html ? `<a class="btn sm primary" target="_blank" rel="noopener" href="${viewUrl(S.current, html.path)}">${esc(html.path.split('/').pop())} 열어보기</a>` : ''}<button class="btn sm" data-diff="${m.id}">변경 보기</button>${rv2}<button class="btn sm" data-revert="${m.id}">되돌리기</button></div>`;
   } else if (m.writer && m.status !== 'running' && m.checkpoint){
     tail += `<div class="st-stop">바뀐 파일 없음</div>`;
   } else if (m.snapshotFailed){
@@ -601,7 +685,8 @@ function renderComposer(){
   wrap.innerHTML = `<div class="composer">
     <div class="mentions" id="mentions"></div>
     <div class="pending" id="pending"></div>
-    <div class="quick">${onAgents().map(a=>`<button data-m="${esc(a.name)}"><i style="background:${a.color}"></i>@${esc(a.name)}</button>`).join('')}<button data-m="전체">@전체</button></div>
+    <div class="target" id="target"></div>
+    <div class="faces">${onAgents().map(a=>`<button data-m="${esc(a.name)}" data-id="${a.id}">${avatar(a.id)}${esc(a.name)}</button>`).join('')}<button class="all" data-m="전체" data-id="all">전체</button></div>
     <textarea class="inp" id="inp" rows="1" enterkeyhint="send" placeholder="메시지를 입력하세요 (줄바꿈은 Shift+Enter)"></textarea>
     <div class="crow">
       <button class="iconbtn" id="attach" title="파일 첨부">${I.clip}</button>
@@ -611,10 +696,11 @@ function renderComposer(){
       <span id="actBtn"></span>
     </div></div>`;
   const inp = $('#inp'); inp.value = draft; autosize();
-  inp.addEventListener('input', () => { autosize(); store.set('ar_draft_'+r.id, inp.value); updateSend(); mentionPopup(); });
+  inp.addEventListener('input', () => { autosize(); store.set('ar_draft_'+r.id, inp.value); updateSend(); mentionPopup(); updateTarget(); });
   inp.addEventListener('keydown', onKey);
   inp.addEventListener('blur', () => setTimeout(()=>$('#mentions')?.classList.remove('show'),150));
-  wrap.querySelectorAll('.quick button').forEach(b => b.onclick = () => insertMention(b.dataset.m));
+  wrap.querySelectorAll('.faces button').forEach(b => b.onclick = () => toggleMention(b.dataset.m));
+  updateTarget();
   $('#attach').onclick = () => $('#file').click();
   $('#file').onchange = (e) => { [...e.target.files].forEach(uploadFile); e.target.value=''; };
   renderPending(); updateBusy();
@@ -668,6 +754,30 @@ function completeMention(key){
   const p = q.start + key.length + 2; t.setSelectionRange(p,p); t.focus();
   $('#mentions').classList.remove('show'); autosize(); updateSend();
 }
+const ALIAS = { claude:['클로드','claude','클로'], codex:['코덱스','codex','gpt','지피티'], opencode:['오픈코드','opencode','oc'], all:['전체','all','모두'] };
+function mentionsIn(text){
+  const out = []; const re = /@([^\s@,.!?:;()\[\]"'`]+)/g; let m;
+  while ((m = re.exec(text))){ const t = m[1].toLowerCase(); for (const [id, ns] of Object.entries(ALIAS)) if (ns.some(n => t.startsWith(n.toLowerCase()))) { if (!out.includes(id)) out.push(id); break; } }
+  return out;
+}
+function updateTarget(){
+  const el = $('#target'), r = curRoom(); if (!el || !r) return;
+  const text = $('#inp')?.value || ''; const ms = mentionsIn(text); const on = onAgents().map(a=>a.id);
+  let who = ms.includes('all') ? on : ms.filter(x => on.includes(x));
+  if (!ms.length){ const pick = [r.lastAgent, r.defaultAgent, ...on].find(x => x && on.includes(x)); who = pick ? [pick] : []; }
+  document.querySelectorAll('.faces button').forEach(b => b.classList.toggle('on', ms.includes(b.dataset.id)));
+  if (!who.length){ el.innerHTML = '<span style="color:var(--text3)">답할 AI가 없어요 · 멤버를 켜주세요</span>'; return; }
+  const names = who.map(id => `<b style="color:${agent(id).color}">${esc(agent(id).name)}</b>`).join(', ');
+  const w = who.length === 1 ? (r.writer === who[0] ? '작성 가능' : '읽기 전용') : '차례로 답해요';
+  el.innerHTML = `<span>→ ${names}${who.length===1 ? (/[가-힣]$/.test(agent(who[0]).name) && ((agent(who[0]).name.charCodeAt(agent(who[0]).name.length-1)-0xac00)%28) ? '이' : '가') : '가'} 답해요</span> <span style="color:var(--text3)">· ${w}</span>`;
+}
+function toggleMention(key){
+  const t = $('#inp'); const tag = '@'+key;
+  if (t.value.includes(tag)) t.value = t.value.replace(new RegExp(tag.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\s?','g'), '');
+  else t.value = (tag + ' ' + t.value).replace(/\s+$/,' ');
+  t.focus(); t.setSelectionRange(t.value.length, t.value.length); autosize(); updateSend(); updateTarget();
+  store.set('ar_draft_'+S.current, t.value);
+}
 function insertMention(key){
   const t=$('#inp'); const tag='@'+key+' ';
   if (!t.value.includes(tag)) t.value = (tag + t.value).replace(/\s+$/,' ');
@@ -720,7 +830,7 @@ async function openRoom(id){
   $('#thread').innerHTML='';
   try { const d = await api('/api/rooms/'+id); S.messages = d.messages; upsertRoom(d); }
   catch(e){ toast(e.message); return; }
-  renderTop(); renderThread(); updateBusy(); S.stick = true; scrollBottom(true);
+  renderTop(); renderThread(); updateBusy(); renderPanel(); updateTarget(); S.stick = true; scrollBottom(true);
 }
 function upsertRoom(r){
   const { messages, ...sum } = r;
@@ -731,7 +841,7 @@ function upsertRoom(r){
 
 // ---------- 모달: 새 방 / 설정 ----------
 function showModal(html){ $('#modal').innerHTML = html; $('#modal').classList.add('show'); $('#scrim').classList.add('show'); }
-function closeOverlays(){ $('#modal').classList.remove('show'); $('#drawer').classList.remove('show'); $('#scrim').classList.remove('show'); closeSide(); }
+function closeOverlays(){ $('#modal').classList.remove('show'); $('#drawer').classList.remove('show'); $('#panel')?.classList.remove('open'); $('#scrim').classList.remove('show'); closeSide(); }
 function openSide(){ $('#side').classList.add('open'); $('#scrim').classList.add('show'); }
 function closeSide(){ $('#side')?.classList.remove('open'); if (!$('#modal').classList.contains('show') && !$('#drawer').classList.contains('show')) $('#scrim').classList.remove('show'); }
 
@@ -846,7 +956,7 @@ async function reloadAgents(){
   renderSide(); renderTop(); renderComposer(); if (S.messages.length) renderThread();
 }
 async function refreshHealth(force){
-  try { S.health = await api('/api/health'+(force?'?force=1':'')); renderSide(); } catch{}
+  try { S.health = await api('/api/health'+(force?'?force=1':'')); renderSide(); renderPanel(); } catch{}
 }
 async function openAgents(){
   const r = curRoom(); if (!r) return;
@@ -919,16 +1029,14 @@ function drawStatus(){
 }
 
 // ---------- 결과물 ----------
-function openResults(){
-  const r = curRoom(); if (!r) return;
+function openResults(){ openPanel('results'); }
+function resultsHTML(r){
   const sets = S.messages.filter(m => m.role==='agent' && m.changes && m.changes.length);
   const first = S.messages.find(m => m.checkpoint);
   const imgs = new Set(); sets.forEach(m => m.changes.forEach(f => { if (f.status!=='D' && /\.(png|jpe?g|gif|webp|svg)$/i.test(f.path)) imgs.add(f.path); }));
   const ups = S.messages.filter(m => m.role==='user' && (m.attachments||[]).length).flatMap(m => m.attachments);
   const htmls = new Set(); sets.forEach(m => m.changes.forEach(f => { if (f.status!=='D' && /\.html?$/i.test(f.path)) htmls.add(f.path); }));
-  const d = $('#drawer');
-  d.innerHTML = `<header><h2>결과물</h2><button class="iconbtn" id="dClose">${I.x}</button></header>
-    <div class="rlist">
+  return `<div class="rlist">
       ${first ? `<div class="ritem"><div class="t"><b>처음부터 지금까지 전체 변경</b><span class="spacer"></span><button class="linkbtn" data-diff="${first.id}">보기</button></div><div class="fl" style="font-family:var(--sans)">이 방에서 처음 작업하기 전 상태와 비교해요</div></div>` : ''}
       ${htmls.size ? `<div class="rsec">HTML 미리보기</div>${[...htmls].map(p=>`<div class="ritem"><div class="t"><span style="color:var(--text3)">${I.file}</span><span style="font-family:var(--mono);font-size:12.5px;word-break:break-all">${esc(p)}</span><span class="spacer"></span><a class="btn sm primary" target="_blank" rel="noopener" href="${viewUrl(r.id,p)}">열기</a></div></div>`).join('')}` : ''}
       ${imgs.size ? `<div class="rsec">이미지·스크린샷</div><div class="thumbs">${[...imgs].map(p=>`<img loading="lazy" src="/api/rooms/${r.id}/file?path=${encodeURIComponent(p)}&token=${encodeURIComponent(TOKEN)}" alt="${esc(p)}" title="${esc(p)}">`).join('')}</div>` : ''}
@@ -938,10 +1046,11 @@ function openResults(){
           <div class="fl">${m.changes.map(f=>`<span class="s s-${f.status}" style="display:inline-grid;width:16px;height:16px;font-size:10px;border-radius:4px;place-items:center;margin-right:4px">${f.status}</span>${esc(f.path)}`).join('<br>')}</div></div>`; }).join('') : '<div style="color:var(--text3);font-size:13px;padding:6px 2px">아직 작성 권한으로 한 작업이 없어요</div>'}
       ${ups.length ? `<div class="rsec">내가 올린 파일</div>${ups.map(u=>`<div class="fl">${I.file} ${esc(u.name)}</div>`).join('')}` : ''}
     </div>`;
-  d.classList.add('show'); $('#scrim').classList.add('show');
-  $('#dClose').onclick = closeOverlays;
-  d.querySelectorAll('[data-diff]').forEach(b => b.onclick = () => openDiff(b.dataset.diff));
-  d.querySelectorAll('[data-revert]').forEach(b => b.onclick = () => confirmRevert(b.dataset.revert));
+}
+function bindResults(d){
+  const hide = () => { if (innerWidth <= 1100) $('#panel').classList.remove('open'); };
+  d.querySelectorAll('[data-diff]').forEach(b => b.onclick = () => { hide(); openDiff(b.dataset.diff); });
+  d.querySelectorAll('[data-revert]').forEach(b => b.onclick = () => { hide(); confirmRevert(b.dataset.revert); });
   d.querySelectorAll('.thumbs img').forEach(img => img.onclick = () => { const lb=$('#lightbox'); lb.innerHTML=`<img src="${img.src}">`; lb.classList.add('show'); });
 }
 
@@ -1015,12 +1124,15 @@ function connect(){
         const first = !S.messages.length;
         if (i>=0) S.messages[i] = ev.message; else S.messages.push(ev.message);
         if (first) { renderThread(); scrollBottom(true); } else updateMsg(ev.message);
+        if (ev.message.status !== 'running' && S.panelTab === 'results') renderPanel();
       }
     } else if (ev.type === 'room'){
       const sig = (r) => r ? Object.entries(r.agents||{}).filter(([,v])=>v.enabled).map(([k])=>k).join() : '';
       const before = sig(S.rooms.find(x=>x.id===ev.room.id));
       upsertRoom(ev.room); renderSide();
-      if (ev.room.id === S.current){ renderTop(); if (before !== sig(ev.room)) renderComposer(); else updateBusy(); }
+      if (ev.room.id === S.current){ renderTop(); if (before !== sig(ev.room)) renderComposer(); else { updateBusy(); updateTarget(); } renderPanel(); }
+    } else if (ev.type === 'usage'){
+      S.usage = ev.usage; renderPanel();
     } else if (ev.type === 'restarting'){
       if (!$('#modal').classList.contains('show')) waitRestart();
     } else if (ev.type === 'idle'){
@@ -1052,6 +1164,9 @@ async function init(){
   catch(e){ if (e.message!=='auth'){ $('#app').innerHTML = `<div class="login"><h1>서버에 연결할 수 없어요</h1><p>${esc(e.message)}</p></div>`; } return; }
   renderShell(); connect();
   refreshHealth();
+  api('/api/usage').then(u => { S.usage = u; renderPanel(); }).catch(()=>{});
+  api('/api/models').then(m => { S.models = m; renderPanel(); }).catch(()=>{});
+  setInterval(() => renderPanel(), 60000); // 초기화까지 남은 시간 갱신
   checkUpdate(); setInterval(() => checkUpdate(), 30*60000);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
   const last = store.get('ar_room');
