@@ -1,0 +1,26 @@
+{
+  "port": 8777,
+  "agents": {
+    "claude": {
+      "name": "클로드",
+      "command": "claude",
+      "model": "",
+      "color": "#C96442"
+    },
+    "codex": {
+      "name": "코덱스",
+      "command": "codex",
+      "model": "",
+      "writeSandbox": "workspace-write",
+      "color": "#1A9E7A"
+    },
+    "opencode": {
+      "name": "오픈코드",
+      "command": "opencode",
+      "model": "opencode/big-pickle",
+      "color": "#6E5BD6"
+    }
+  },
+  "defaultAgent": "claude",
+  "autoTurns": 3
+}
