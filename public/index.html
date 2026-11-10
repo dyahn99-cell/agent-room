@@ -296,6 +296,12 @@ textarea.inp::placeholder{color:var(--text3)}
 .state{font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:999px;margin-left:auto;white-space:nowrap}
 .s-idle{background:var(--raised);color:var(--text2)}.s-work{background:var(--accent-soft);color:var(--accent)}.s-bad{background:#F5DAD6;color:#A8392C}.s-q{background:#EEF2FF;color:#4F46E5}
 .meta{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+.citechip{display:inline-flex;align-items:center;gap:5px;margin:8px 6px 0 0;font-size:12.5px;padding:4px 10px;border-radius:999px;background:var(--raised);color:var(--text2);font-weight:600;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.citechip.bad{opacity:.6;text-decoration:line-through;cursor:default}
+.kfile{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line,rgba(0,0,0,.08));border-radius:10px;margin:6px 0;font-size:13.5px}
+.kfile .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.kfile small{color:var(--text3);white-space:nowrap}
+.kdrop{border:1.5px dashed var(--text3);border-radius:12px;padding:14px;text-align:center;color:var(--text2);font-size:13.5px;cursor:pointer}
 .pill{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--raised);color:var(--text2)}
 .pill.role{background:#EEF2FF;color:#4F46E5;font-weight:600}
 .ubar{margin-top:9px}.ubar .l{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;color:var(--text3);margin-bottom:3px}
@@ -631,6 +637,37 @@ function openPersonas(tab){
   if ($('#newP')) $('#newP').onclick = () => editPersona(null, () => openPersonas('p'));
   if ($('#newT')) $('#newT').onclick = () => editTeam(null);
 }
+const fmtSize = (n) => n > 1048576 ? (n/1048576).toFixed(1)+'MB' : Math.max(1, Math.round(n/1024))+'KB';
+async function knowBox(id, box){
+  if (!box) return;
+  const draw = (k) => {
+    if (!box.isConnected) return;
+    const warn = (!k.tools.pdf || !k.tools.zip) ? '<div style="font-size:12.5px;color:var(--text3);margin-top:6px">PDF·오피스 글자 추출 도구는 첫 파일을 올릴 때 자동으로 설치해요.</div>' : '';
+    box.innerHTML = (k.files.length ? k.files.map(f => `<div class="kfile"><span>${/\.pdf$/i.test(f.name)?'📕':/\.(docx|pptx|xlsx)$/i.test(f.name)?'📘':'📄'}</span><span class="nm" data-kview="${esc(f.name)}">${esc(f.name)}</span><small>${fmtSize(f.size)}${f.text==='pending'?' · 글자 뽑는 중…':f.text==='empty'?' · 글자 없음(스캔본?)':f.text==='none'?' · 글자 추출 안 됨':''}</small><button class="linkbtn" data-kdel="${esc(f.name)}">빼기</button></div>`).join('') : '<div style="font-size:13px;color:var(--text3);margin-bottom:6px">아직 자료가 없어요. 사양서, 단가표, 카탈로그, 회의록 같은 걸 넣어두면 이 전문가가 답하기 전에 먼저 찾아보고, 어느 파일을 봤는지 밝혀요.</div>')
+      + '<div class="kdrop" id="kAdd">＋ 파일 넣기 (PDF · 워드 · 파워포인트 · 엑셀 · 텍스트)</div><input type="file" id="kFile" multiple hidden>' + warn;
+    box.querySelector('#kAdd').onclick = () => box.querySelector('#kFile').click();
+    box.querySelector('#kFile').onchange = async (e) => {
+      const files = [...e.target.files]; if (!files.length) return;
+      let last = k, n = 0;
+      for (const f of files){
+        box.querySelector('#kAdd').textContent = `올리는 중… (${++n}/${files.length}) ${f.name}`;
+        try { const r = await api('/api/knowledge/'+id+'?name='+encodeURIComponent(f.name), { method:'POST', body:f }); last = { ...last, files:r.files }; } catch(err){ toast(f.name+': '+err.message); }
+      }
+      draw(last); reloadAgents().catch(()=>{}); poll();
+    };
+    box.querySelectorAll('[data-kdel]').forEach(b => b.onclick = async () => { try { const r = await api('/api/knowledge/'+id+'?name='+encodeURIComponent(b.dataset.kdel), { method:'DELETE' }); draw({ ...k, files:r.files }); reloadAgents().catch(()=>{}); } catch(err){ toast(err.message); } });
+    box.querySelectorAll('[data-kview]').forEach(b => b.onclick = () => viewKnow(id, b.dataset.kview, true));
+  };
+  const load = async () => { try { const k = await api('/api/knowledge/'+id); draw(k); return k; } catch(e){ box.textContent = e.message; } };
+  const poll = async () => { for (let i=0;i<40;i++){ await new Promise(r=>setTimeout(r,1500)); if (!box.isConnected) return; const k = await load(); if (!k || !k.files.some(f=>f.text==='pending')) return; } };
+  const k = await load(); if (k && k.files.some(f=>f.text==='pending')) poll();
+}
+async function viewKnow(id, name, stacked){
+  let d; try { d = await api('/api/knowledge/'+id+'/text?name='+encodeURIComponent(name)); } catch(e){ return toast(e.message); }
+  const html = `<div style="position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px" id="kView"><div style="background:var(--bg,#fff);color:var(--text);border-radius:16px;max-width:760px;width:100%;max-height:86vh;display:flex;flex-direction:column;overflow:hidden"><div style="display:flex;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid rgba(0,0,0,.08)"><b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📚 ${esc(name)}</b><button class="btn sm" id="kvClose">닫기</button></div><pre style="margin:0;padding:14px 16px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.55">${esc(d.text || d.note || '(내용 없음)')}${d.more?'\n\n… (뒤는 생략)':''}</pre></div></div>`;
+  const el = document.createElement('div'); el.innerHTML = html; const node = el.firstElementChild; document.body.appendChild(node);
+  node.onclick = (e) => { if (e.target === node || e.target.id === 'kvClose') node.remove(); };
+}
 async function editPersona(id, back){
   if (!S.models) { try { S.models = await api('/api/models'); } catch {} }
   const a = id ? S.agents.find(x=>x.id===id) : { name:'', emoji:'', color:PALETTE[(S.agents.length)%PALETTE.length], engine:'opencode', model:'', effort:'', description:'', systemPrompt:'' };
@@ -644,6 +681,7 @@ async function editPersona(id, back){
         <div class="field"><label>색</label><div style="display:flex;gap:6px;flex-wrap:wrap">${PALETTE.map(c=>`<button data-c="${c}" style="width:28px;height:28px;border-radius:8px;background:${c};outline:${d.color===c?'3px solid var(--text)':'none'};outline-offset:2px"></button>`).join('')}</div></div>
         <div class="field"><label>한 줄 소개 (다른 AI들에게도 보여요)</label><input id="pDesc" value="${esc(d.description||'')}" placeholder="예: 아이디어 발산 · 엉뚱한 관점"></div>
         <div class="field"><label>정체성·전문 분야 (지시문)</label><textarea class="reason" id="pPrompt" style="min-height:110px" placeholder="너는 ○○야. 무엇을 잘하고, 어떤 관점으로 말하고, 무엇은 하지 않는다.">${esc(d.systemPrompt||'')}</textarea></div>
+        <div class="field"><label>자료 폴더 (이 전문가만 보는 참고 자료)</label>${id ? '<div id="kBox"><div style="font-size:13px;color:var(--text3)">불러오는 중…</div></div>' : '<div style="font-size:13px;color:var(--text3)">먼저 저장하면 자료를 넣을 수 있어요.</div>'}</div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
           <div class="field"><label>엔진</label><select id="pEng" ${a.builtin?'disabled':''}>${Object.entries(ENG_LABEL).map(([k,v])=>`<option value="${k}" ${d.engine===k?'selected':''}>${v}</option>`).join('')}</select></div>
           <div class="field"><label>모델</label><select id="pModel">${cat.models.map(x=>`<option value="${esc(x.id)}" ${x.id===d.model?'selected':''}>${esc(x.name)}</option>`).join('')}${!known&&d.model?`<option value="${esc(d.model)}" selected>${esc(d.model)}</option>`:''}<option value="__custom">직접 입력…</option></select></div>
@@ -654,6 +692,7 @@ async function editPersona(id, back){
       <footer>${id && !a.builtin ? '<button class="btn danger" id="pDel" style="margin-right:auto">삭제</button>' : ''}<button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">저장</button></footer>`);
     const keep = () => { d.name=$('#pName').value; d.emoji=$('#pEmoji').value; d.description=$('#pDesc').value; d.systemPrompt=$('#pPrompt').value; d.effort=$('#pEff').value; };
     $('#mClose').onclick = $('#mCancel').onclick = () => back ? back() : closeOverlays();
+    if (id) knowBox(id, $('#kBox'));
     $('#modal').querySelectorAll('[data-c]').forEach(b => b.onclick = () => { keep(); d.color = b.dataset.c; draw(); });
     $('#pEng').onchange = (e) => { keep(); d.engine = e.target.value; d.model=''; d.effort=''; draw(); };
     $('#pModel').onchange = (e) => { keep(); let v = e.target.value; if (v==='__custom'){ v = (window.prompt('모델 이름 (예: provider/model)', d.model||'')||'').trim(); } d.model = v; d.effort=''; draw(); };
@@ -882,6 +921,7 @@ function memberCard(r, a){
   const bars = (u.windows||[]).map(w => { const pct = Math.round((w.util||0)*100); const cls = pct >= 95 ? 'crit' : pct >= 80 ? 'warn' : '';
     return `<div class="ubar ${cls}"><div class="l"><span>${esc(w.label)}</span><span>${pct}%${w.resetsAt && pct >= 50 ? ' · '+fmtLeft(w.resetsAt) : ''}</span></div><div class="t"><i style="width:${Math.min(100,pct)}%"></i></div></div>`; }).join('');
   const pills = [ra.role ? `<span class="pill role">${ROLE_NAME[ra.role]}</span>` : '',
+    a.know ? `<span class="pill" data-know="${a.id}" style="cursor:pointer">📚 자료 ${a.know}개</span>` : '',
     u.tokensToday && u.day === new Date().toLocaleDateString('sv-SE') ? `<span class="pill">오늘 ${fmtTok(u.tokensToday)} 토큰</span>` : '',
     h && h.ok === false ? `<span class="pill" style="color:var(--err)">${esc(h.text)}</span>` : '',
     h && h.sandbox === false ? `<span class="pill">${ra.noSandbox ? '샌드박스 없이 · 스냅샷 보호' : '샌드박스 안 됨 · 실행 막힘'}</span>` : ''].join('');
@@ -904,7 +944,7 @@ function renderPanel(){
   el.innerHTML = `<div class="ptabs"><button data-tab="members" class="${S.panelTab==='members'?'on':''}">멤버</button><button data-tab="memory" class="${S.panelTab==='memory'?'on':''}">기억${memN?' '+memN:''}</button><button data-tab="ideas" class="${S.panelTab==='ideas'?'on':''}">아이디어${(r.ideas||[]).length?' '+r.ideas.length:''}</button><button data-tab="results" class="${S.panelTab==='results'?'on':''}">결과물${sets.length?' '+sets.length:''}</button></div>
     <div class="pbody">${S.panelTab==='members' ? (r.teamName ? `<div class="memhd"><span>패널: <b>${esc(r.teamName)}</b></span></div>` : '') + roomMemberList().map(a => memberCard(r, a)).join('') + `<div style="display:flex;gap:6px;margin:6px 12px"><button class="btn sm" id="inviteBtn">＋ 전문가 초대</button><button class="btn sm" id="personaMgr">전문가·패널 관리</button></div><div style="padding:4px 16px;font-size:12px;color:var(--text3)">카드를 누르면 모델·역할을 바꿀 수 있어요</div>` : S.panelTab==='memory' ? memoryHTML(r) : S.panelTab==='ideas' ? ideasHTML(r) : resultsHTML(r)}</div>`;
   el.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { S.panelTab = b.dataset.tab; renderPanel(); });
-  el.querySelectorAll('[data-mem]').forEach(c => c.onclick = (e) => { if (e.target.closest('[data-wr],[data-nosb]')) return; openAgents(); });
+  el.querySelectorAll('[data-mem]').forEach(c => c.onclick = (e) => { if (e.target.closest('[data-wr],[data-nosb]')) return; const kp = e.target.closest('[data-know]'); if (kp) return editPersona(kp.dataset.know); openAgents(); });
   el.querySelectorAll('[data-nosb]').forEach(b => b.onclick = async (e) => {
     e.stopPropagation(); const id = b.dataset.nosb;
     try { upsertRoom(await api('/api/rooms/'+r.id, { method:'PATCH', body:JSON.stringify({ agents:{ [id]:{ noSandbox: !roomAgent(id).noSandbox } } }) })); renderPanel(); } catch(err){ toast(err.message); }
@@ -1002,6 +1042,7 @@ function renderMsg(m){
   else if (running) body = (m.thinking?`<div class="thinking">${esc(m.thinking)}</div>`:'') + `<div class="typing"><i></i><i></i><i></i></div>`;
   let tail = '';
   if (m.status === 'stopped') tail = `<div class="st-stop">중지됨</div>`;
+  if (m.cites && m.cites.length) tail += `<div>${m.cites.map(c=>`<span class="citechip ${c.ok?'':'bad'}" ${c.ok?`data-cite="${esc(c.name)}" data-citeby="${m.agent}"`:'title="자료 폴더에 없는 파일이에요"'}>📚 ${esc(c.name)}</span>`).join('')}</div>`;
   if (m.memoryUpdate) tail += `<div><span class="memchip" data-memopen>🧠 방 기억을 정리했어요 +${m.memoryUpdate.added} −${m.memoryUpdate.removed} · 보기</span></div>`;
   if (m.unexpected) tail += `<div class="st-stop" style="color:var(--err)">⚠️ 읽기 전용이었는데 파일이 바뀌었어요. 확인하고 필요하면 되돌리세요.</div>`;
   if (m.changes && m.changes.length){
@@ -1032,6 +1073,7 @@ function bindMsg(el){
   el.querySelectorAll('[data-revert]').forEach(b => b.onclick = () => confirmRevert(b.dataset.revert));
   el.querySelectorAll('[data-ideamsg]').forEach(b => b.onclick = () => { const m=S.messages.find(x=>x.id===b.dataset.ideamsg); if (m) saveIdea(m.text.replace(/\s+/g,' ').slice(0,300), m.id); });
   el.querySelectorAll('[data-memopen]').forEach(b => b.onclick = () => openPanel('memory'));
+  el.querySelectorAll('[data-cite]').forEach(b => b.onclick = () => viewKnow(b.dataset.citeby, b.dataset.cite));
   el.querySelectorAll('[data-undo]').forEach(b => b.onclick = () => { const m=S.messages.find(x=>x.id===b.dataset.undo); if (m) api(`/api/rooms/${S.current}/revert`, { method:'POST', body:JSON.stringify({ checkpoint:m.undoCheckpoint }) }).then(()=>toast('취소했어요')).catch(e=>toast(e.message)); });
   el.querySelectorAll('[data-allownosb]').forEach(b => b.onclick = async () => {
     try { upsertRoom(await api('/api/rooms/'+S.current, { method:'PATCH', body:JSON.stringify({ agents:{ codex:{ noSandbox:true } } }) })); await api(`/api/rooms/${S.current}/retry`, { method:'POST', body:JSON.stringify({ msgId:b.dataset.allownosb }) }); } catch(e){ toast(e.message); }
@@ -1239,6 +1281,7 @@ const COMMANDS = [
   { c:'/성적표', d:'AI별 답·실패·승인 기록', run:()=>openStats() },
   { c:'/브리핑', d:'아침 브리핑·주간 회고 보기', run:()=>openBriefings() },
   { c:'/초대', d:'이 방에 전문가 초대', run:()=>openInvite() },
+  { c:'/자료', d:'전문가에게 참고 자료 넣기', run:()=>openPersonas('p') },
   { c:'/전문가', d:'전문가·패널 만들기·고치기', run:()=>openPersonas() },
   { c:'/기록', d:'작업 기록장 (명령·파일·승인)', run:()=>openActivity(true) },
 ];
@@ -1447,7 +1490,7 @@ function confirmRevert(msgId){
 // ---------- AI 설정 ----------
 async function reloadAgents(){
   const st = await api('/api/state'); S.agents = st.agents; S.version = st.version; S.teams = st.teams||[];
-  renderSide(); renderTop(); renderComposer(); if (S.messages.length) renderThread();
+  renderSide(); renderTop(); renderComposer(); if (S.messages.length) renderThread(); try { renderPanel(); } catch {}
 }
 async function refreshHealth(force){
   try { S.health = await api('/api/health'+(force?'?force=1':'')); renderSide(); renderPanel(); } catch{}

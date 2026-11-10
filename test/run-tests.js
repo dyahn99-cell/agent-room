@@ -30,7 +30,7 @@ const newRoom = async (title, cwd, teamId) => (await api('/api/rooms', { method:
   fs.mkdirSync(path.join(SEED, 'replies')); fs.writeFileSync(path.join(SEED, 'replies', '.keep'), '');
   const G = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a]).toString();
   G(SEED, 'add', '-A'); G(SEED, 'commit', '-qm', 'init'); G(SEED, 'push', '-q', BARE, 'inbox');
-  const srv = spawn('node', [path.join(ROOT, 'server.js')], { env: { ...process.env, AGENT_ROOM_INBOX_REMOTE: BARE, AGENT_ROOM_CONFIG: path.join(TMP, 'config.json'), AGENT_ROOM_DATA: DATA, MOCK_LOG: LOG, AGENT_ROOM_TEST_SNAPSHOT_DELAY: '800', CODEX_HOME: path.join(TMP, 'codexhome') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const srv = spawn('node', [path.join(ROOT, 'server.js')], { env: { ...process.env, AGENT_ROOM_NO_APT: '1', AGENT_ROOM_INBOX_REMOTE: BARE, AGENT_ROOM_CONFIG: path.join(TMP, 'config.json'), AGENT_ROOM_DATA: DATA, MOCK_LOG: LOG, AGENT_ROOM_TEST_SNAPSHOT_DELAY: '800', CODEX_HOME: path.join(TMP, 'codexhome') }, stdio: ['ignore', 'pipe', 'pipe'] });
   let srvOut = ''; srv.stdout.on('data', (d) => srvOut += d); srv.stderr.on('data', (d) => srvOut += d);
   for (let i = 0; i < 50 && !fs.existsSync(path.join(DATA, 'url.txt')); i++) await sleep(100);
   TOK = fs.readFileSync(path.join(DATA, 'token'), 'utf8').trim();
@@ -238,6 +238,43 @@ const newRoom = async (title, cwd, teamId) => (await api('/api/rooms', { method:
     // 21. 작업 기록장
     { const a = (await api('/api/activity?limit=500')).body;
       check('작업 기록장에 실행·승인·되돌리기 기록', a.some((x) => x.type === 'turn') && a.some((x) => x.type === 'revert') && a.some((x) => x.type === 'files') && a.some((x) => x.type === 'members'), [...new Set(a.map((x) => x.type))].join(',')); }
+    // 22. 자료 폴더: 전문가별 참고 자료
+    { const d = W('know'); const rid = await newRoom('자료', d, 'panel4');
+      const up = (pid, name, body) => fetch(B + `/api/knowledge/${pid}?name=` + encodeURIComponent(name), { method: 'POST', headers: { 'x-token': TOK }, body }).then((r) => r.json());
+      await up('ledger', '단가표.txt', 'AMS20 단가 120원\n');
+      const docx = path.join(TMP, 'spec.docx');
+      let office = true;
+      try { execFileSync('python3', ['-c', `import zipfile,sys\nz=zipfile.ZipFile(sys.argv[1],'w')\nz.writestr('word/document.xml','<w:document><w:body><w:p><w:r><w:t>정격 압력 0.7MPa</w:t></w:r></w:p><w:p><w:r><w:t>IO-Link 지원</w:t></w:r></w:p></w:body></w:document>')\nz.close()`, docx]); } catch { office = false; }
+      if (office) await up('ledger', '사양서.docx', fs.readFileSync(docx));
+      await up('ledger', '../../../evil name?.txt', 'x');
+      let k; for (let i = 0; i < 30; i++) { await sleep(150); k = (await api('/api/knowledge/ledger')).body; if (!k.files.some((f) => f.text === 'pending' || f.text === 'none')) break; }
+      check('자료 올리기 + 위험한 파일 이름 정리', k.files.some((f) => f.name === '단가표.txt') && k.files.every((f) => !/[\/?]/.test(f.name) && !f.name.startsWith('.')) && !fs.existsSync(path.join(TMP, 'evil name?.txt')) && k.files.length === (office ? 3 : 2), JSON.stringify(k.files));
+      if (office && k.tools.zip) {
+        const t = (await api('/api/knowledge/ledger/text?name=' + encodeURIComponent('사양서.docx'))).body;
+        check('워드 파일에서 글자 추출', /정격 압력 0\.7MPa\nIO-Link 지원/.test(t.text) && k.files.find((f) => f.name === '사양서.docx').text === 'ok', JSON.stringify(t));
+      }
+      const st0 = (await api('/api/state')).body;
+      check('전문가 카드에 자료 개수', st0.agents.find((a) => a.id === 'ledger').know === (office ? 3 : 2) && st0.agents.find((a) => a.id === 'marcus').know === 0, 'count');
+      fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@레저 자료봐' }) }); const r = await idle(rid);
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@마커스 자료봐' }) }); const r2 = await idle(rid);
+      const log = fs.readFileSync(LOG, 'utf8').split('===== ').filter(Boolean);
+      const lg = log.find((x) => x.includes('너는 레저')) || '', mk = log.find((x) => x.includes('너는 마커스')) || '';
+      const kd = path.join(DATA, 'knowledge', 'ledger');
+      check('자료 폴더가 그 전문가에게만 전달', lg.includes('[자료 폴더') && lg.includes('단가표.txt') && lg.includes('"--add-dir","' + kd + '"') && !mk.includes('[자료 폴더') && !mk.includes('--add-dir'), lg.slice(0, 200));
+      if (office && k.tools.zip) check('추출본 안내가 프롬프트에', lg.includes('"사양서.docx.txt"에서 읽어'), 'no hint');
+      const m = r.messages.filter((x) => x.role === 'agent' && x.agent === 'ledger').pop();
+      const m2 = r2.messages.filter((x) => x.role === 'agent' && x.agent === 'marcus').pop();
+      check('출처 표시: 있는 파일만 확인됨', m.cites && m.cites.find((c) => c.name === '단가표.txt').ok && m.cites.find((c) => c.name === '없는파일.pdf').ok === false && !m2.cites, JSON.stringify(m.cites));
+      fs.writeFileSync(LOG, '');
+      await api('/api/personas', { method: 'POST', body: JSON.stringify({ id: 'hunter', name: '헌터', engine: 'opencode', systemPrompt: '너는 헌터' }) });
+      await up('hunter', '고객.md', '# 고객');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@헌터 봐줘' }) }); await idle(rid);
+      const hl = fs.readFileSync(LOG, 'utf8');
+      check('오픈코드에는 자료 폴더 읽기 허용이 전달', hl.includes('external_directory') && hl.includes(path.join(DATA, 'knowledge', 'hunter')), hl.slice(0, 300));
+      await fetch(B + '/api/knowledge/ledger?name=' + encodeURIComponent('단가표.txt'), { method: 'DELETE', headers: { 'x-token': TOK } });
+      const k2 = (await api('/api/knowledge/ledger')).body;
+      check('자료 빼기', !k2.files.some((f) => f.name === '단가표.txt'), JSON.stringify(k2.files)); }
   } catch (e) { check('테스트 실행', false, e.stack); }
   srv.kill('SIGTERM'); await sleep(500);
   const fail = results.filter((r) => !r[1]).length;

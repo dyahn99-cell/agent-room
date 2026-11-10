@@ -23,7 +23,7 @@ proot-distro login ubuntu -- env PATH="$UPATH" bash -c '
 set -e
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y curl git ca-certificates
+apt-get install -y curl git ca-certificates poppler-utils unzip
 PLAT="$(/usr/bin/node -p process.platform 2>/dev/null || echo none)"
 VER="$(/usr/bin/node -p "process.versions.node.split(\".\")[0]" 2>/dev/null || echo 0)"
 if [ "$PLAT" != "linux" ] || [ "$VER" -lt 20 ]; then
