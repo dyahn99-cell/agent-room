@@ -14,6 +14,13 @@ for f in start.sh stop.sh; do
   fi
 done
 
+# 홈 화면 바로가기 (Termux:Widget 앱): 켜기 / 끄기 / 재시작
+mkdir -p "$HOME/.shortcuts"
+printf '#!/data/data/com.termux/files/usr/bin/bash\nbash "$HOME/start.sh"\n' > "$HOME/.shortcuts/AgentRoom 켜기"
+printf '#!/data/data/com.termux/files/usr/bin/bash\nbash "$HOME/stop.sh"\n' > "$HOME/.shortcuts/AgentRoom 끄기"
+printf '#!/data/data/com.termux/files/usr/bin/bash\nbash "$HOME/stop.sh"; sleep 2; bash "$HOME/start.sh"\n' > "$HOME/.shortcuts/AgentRoom 재시작"
+chmod +x "$HOME/.shortcuts/"AgentRoom* 2>/dev/null
+
 # 화면이 꺼져도 Termux가 죽지 않게
 termux-wake-lock 2>/dev/null
 

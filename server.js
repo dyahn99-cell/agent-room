@@ -15,7 +15,7 @@ const ROOMS_DIR = path.join(DATA, 'rooms');
 const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
-const VERSION = '0.9.0';
+const VERSION = '0.9.1';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS]) fs.mkdirSync(d, { recursive: true });
 
@@ -1373,6 +1373,15 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/update' && req.method === 'GET') {
       return send(res, 200, await checkUpdate(!!url.searchParams.get('force')));
+    }
+    if (p === '/api/restart' && req.method === 'POST') {
+      const b = await readJSON(req);
+      const busy = [...rooms.values()].some((r) => runtime(r.id).current || runtime(r.id).queue.length);
+      if (busy && !b.force) return send(res, 409, { error: 'AI가 작업 중이에요. 그래도 재시작하면 지금 작업은 멈춰요.', busy: true });
+      send(res, 200, { ok: true, restarting: true });
+      broadcast({ type: 'restarting' });
+      setTimeout(() => { for (const r of rooms.values()) { stopRoom(r); saveRoom(r, true); } setTimeout(() => process.exit(75), 800); }, 300);
+      return;
     }
     if (p === '/api/update' && req.method === 'POST') {
       const busy = [...rooms.values()].some((r) => runtime(r.id).current || runtime(r.id).queue.length);

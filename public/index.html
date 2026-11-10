@@ -534,6 +534,7 @@ function renderShell(){
       <button class="sidebtn" id="sbStats">📊 AI 성적표</button>
       <button class="sidebtn" id="sbPersonas">👥 전문가·패널</button>
       <button class="sidebtn" id="sbActivity">🧾 작업 기록</button>
+      <button class="sidebtn" id="sbRestart">🔄 서버 재시작</button>
     </div>
     <h6>대화방</h6>
     <div class="rooms" id="rooms"></div>
@@ -556,6 +557,7 @@ function renderShell(){
   $('#sbStats').onclick = () => { closeSide(); openStats(); };
   $('#sbPersonas').onclick = () => { closeSide(); openPersonas(); };
   $('#sbActivity').onclick = () => { closeSide(); openActivity(); };
+  $('#sbRestart').onclick = () => { closeSide(); restartServer(); };
   $('#theme').onclick = toggleTheme;
   $('#verBtn').onclick = openUpdate;
   $('#scroll').addEventListener('scroll', () => {
@@ -1228,6 +1230,7 @@ const COMMANDS = [
   { c:'/새방', d:'새 방 만들기', run:()=>openNewRoom() },
   { c:'/방설정', d:'방 이름·폴더·자동 턴', run:()=>openSettings() },
   { c:'/업데이트', d:'새 버전 확인', run:()=>openUpdate() },
+  { c:'/재시작', d:'서버 다시 켜기', run:()=>restartServer() },
   { c:'/관리자', d:'이 방 합의·피드백을 관리자(Claude)에게 보내기', arg:true, run:(t)=>openManager(t) },
   { c:'/관리자확인', d:'관리자 답장 지금 확인', run:()=>api(`/api/rooms/${S.current}/managercheck`,{method:'POST'}).then(()=>toast('확인했어요')).catch(e=>toast(e.message)) },
   { c:'/이어가기', d:'기억·아이디어를 가지고 새 방으로', run:()=>openContinue() },
@@ -1568,13 +1571,23 @@ async function openUpdate(){
   else if (!u.behind) body = `<p style="margin:0;color:var(--text2)">최신 버전이에요 (v${esc(u.version)} · ${esc(u.current)}).</p>`;
   else { ok = true; body = `<p style="margin:0 0 8px;color:var(--text2)">새 변경 ${u.behind}개가 있어요. 받으면 서버가 잠깐 다시 켜져요. 대화방과 설정은 그대로예요.</p><ul style="margin:0;padding-left:18px;font-size:14px">${u.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul>`; }
   $('#modal').innerHTML = `<header><h2>업데이트</h2><button class="iconbtn" id="mClose">${I.x}</button></header><div class="mbody">${body}</div>
-    <footer><button class="btn" id="mCancel">닫기</button>${ok?'<button class="btn primary" id="mOk">지금 업데이트</button>':''}</footer>`;
+    <footer><button class="btn" id="mRestart" style="margin-right:auto">서버 재시작</button><button class="btn" id="mCancel">닫기</button>${ok?'<button class="btn primary" id="mOk">지금 업데이트</button>':''}</footer>`;
   $('#mClose').onclick = $('#mCancel').onclick = closeOverlays;
+  $('#mRestart').onclick = () => restartServer();
   if (ok) $('#mOk').onclick = async () => {
     $('#mOk').disabled = true; $('#mOk').textContent = '받는 중…';
     try { await api('/api/update', { method:'POST' }); waitRestart(); }
     catch(e){ toast(e.message); $('#mOk').disabled = false; $('#mOk').textContent = '지금 업데이트'; }
   };
+}
+async function restartServer(force){
+  try { await api('/api/restart', { method:'POST', body:JSON.stringify({ force:!!force }) }); waitRestart(); }
+  catch(e){
+    if (/작업 중/.test(e.message)){
+      showModal(`<header><h2>재시작할까요?</h2></header><div class="mbody"><p style="margin:0;color:var(--text2)">${esc(e.message)}</p></div><footer><button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">멈추고 재시작</button></footer>`);
+      $('#mCancel').onclick = closeOverlays; $('#mOk').onclick = () => restartServer(true);
+    } else toast(e.message);
+  }
 }
 function waitRestart(){
   showModal(`<div class="mbody" style="text-align:center;padding:28px"><span class="spin" style="display:inline-block;width:22px;height:22px"></span><p style="margin:12px 0 0">업데이트 적용 중… 잠시만요</p></div>`);
