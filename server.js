@@ -16,7 +16,7 @@ const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
 const KNOW = path.join(DATA, 'knowledge');
-const VERSION = '0.10.0';
+const VERSION = '0.11.0';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS, KNOW]) fs.mkdirSync(d, { recursive: true });
 
@@ -97,7 +97,9 @@ function run(cmd, args, opts = {}) {
   });
 }
 
-const availability = {};
+const availability = { acp: true };
+const ALL_ENGINES = () => [...ENGINES, 'acp'];
+function splitCmd(str) { const out = []; String(str || '').replace(/"([^"]*)"|'([^']*)'|(\S+)/g, (_, a, b, c) => { out.push(a != null ? a : b != null ? b : c); return ''; }); return out; }
 async function checkAgents() {
   for (const id of AGENT_IDS) {
     const r = await run('sh', ['-lc', `command -v ${JSON.stringify(config.agents[id].command)}`], { timeout: 5000 });
@@ -848,7 +850,15 @@ function buildPrompt(room, agentId, attachments) {
   const st = room.agentState[agentId] || (room.agentState[agentId] = {});
   const msgs = room.messages.filter((m) => m.role !== 'system' || m.forAgents);
   const startIdx = st.session ? (st.seen || 0) : Math.max(st.freshFrom || 0, msgs.length - 30);
-  const fresh = msgs.slice(startIdx).filter((m) => !(m.role === 'agent' && (m.agent === agentId || m.status === 'error')) && m.status !== 'running');
+  let fresh = msgs.slice(startIdx).filter((m) => !(m.role === 'agent' && (m.agent === agentId || m.status === 'error')) && m.status !== 'running');
+  if (room._blind) { // 블라인드 라운드: 같은 라운드의 다른 답은 가리고, 나중에 보여줄 목록에 적어둠
+    const hide = fresh.filter((m) => m.role === 'agent' && m.blind && m.blind.bid === room._blind && !m.blind.final);
+    st.missed = [...new Set([...(st.missed || []), ...hide.map((m) => m.id)])];
+    fresh = fresh.filter((m) => !hide.includes(m));
+  } else if (st.missed && st.missed.length) {
+    const back = st.missed.map((id) => msgs.find((m) => m.id === id)).filter((m) => m && !fresh.includes(m) && msgs.indexOf(m) < startIdx);
+    fresh = [...back, ...fresh]; st.missed = [];
+  }
   const lines = [];
   if (!st.session) lines.push(preamble(room, agentId), '', '[지금까지의 대화]');
   else lines.push('[새 메시지]');
@@ -881,7 +891,65 @@ function stepTitle(name, input) {
   return p ? `${name} · ${clip(String(p), 120)}` : name;
 }
 
+function acpRpc(ctx, method, params) { const A = ctx.acp; const id = ++A.id; A.pending[id] = method; ctx.send({ jsonrpc: '2.0', id, method, params }); }
+const acpAdapter = {
+  interactive: true,
+  build(room, prompt, st, writer, mid) {
+    const parts = splitCmd(P(mid).acpCommand);
+    return { args: parts.slice(1), acp: { prompt: prompt.text, writer, cwd: room.cwd, session: st.session || null } };
+  },
+  start(ctx, info) {
+    ctx.acp = { ...info, id: 0, pending: {}, chunks: '', loading: false, caps: {} };
+    acpRpc(ctx, 'initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'agent-room', version: VERSION } });
+  },
+  handle(ev, ctx) {
+    const A = ctx.acp; if (!A) return;
+    const sendPrompt = () => acpRpc(ctx, 'session/prompt', { sessionId: A.sid, prompt: [{ type: 'text', text: A.prompt }] });
+    if (ev.id != null && !ev.method) { // 우리 요청에 대한 응답
+      const m = A.pending[ev.id]; delete A.pending[ev.id];
+      const err = ev.error ? (ev.error.message || JSON.stringify(ev.error)) + (ev.error.data ? ' ' + clip(JSON.stringify(ev.error.data), 300) : '') : null;
+      if (m === 'initialize') {
+        if (err) { ctx.error('ACP 연결 실패: ' + err); return ctx.end(); }
+        A.caps = (ev.result && ev.result.agentCapabilities) || {};
+        if (A.session && A.caps.loadSession) { A.loading = true; acpRpc(ctx, 'session/load', { sessionId: A.session, cwd: A.cwd, mcpServers: [] }); }
+        else acpRpc(ctx, 'session/new', { cwd: A.cwd, mcpServers: [] });
+      } else if (m === 'session/load') {
+        A.loading = false;
+        if (err) { ctx.session(null); acpRpc(ctx, 'session/new', { cwd: A.cwd, mcpServers: [] }); } else { A.sid = A.session; sendPrompt(); }
+      } else if (m === 'session/new') {
+        if (err) { ctx.error((/auth/i.test(err) ? '이 에이전트는 먼저 로그인이 필요해요. 우분투에서 한 번 직접 실행해 로그인해 주세요. ' : 'ACP 세션 시작 실패: ') + err); return ctx.end(); }
+        A.sid = ev.result && ev.result.sessionId;
+        if (A.caps.loadSession) ctx.session(A.sid); // 이어가기를 못 하는 에이전트는 매번 대화 전체를 다시 넘김
+        sendPrompt();
+      } else if (m === 'session/prompt') {
+        if (err) ctx.error(err); else if (A.chunks.trim()) ctx.final(A.chunks);
+        ctx.end();
+      }
+      return;
+    }
+    if (ev.method === 'session/request_permission' && ev.id != null) {
+      const p = ev.params || {}; const tc = p.toolCall || {}; const opts = p.options || [];
+      const desc = [tc.title, tc.kind, JSON.stringify(tc.rawInput || '')].join(' ');
+      const blocked = blockList().some((c) => desc.includes(c));
+      const readOnly = ['read', 'search', 'fetch', 'think'].includes(tc.kind);
+      const allow = !blocked && (A.writer || readOnly);
+      const pick = allow ? (opts.find((o) => o.kind === 'allow_once') || opts.find((o) => o.kind === 'allow_always')) : (opts.find((o) => o.kind === 'reject_once') || opts.find((o) => o.kind === 'reject_always'));
+      ctx.step({ id: 'perm-' + ev.id, kind: 'tool', title: (allow ? '허용: ' : '거절: ') + clip(tc.title || tc.kind || '도구 사용', 100), status: allow ? 'done' : 'error' });
+      return ctx.send({ jsonrpc: '2.0', id: ev.id, result: { outcome: pick ? { outcome: 'selected', optionId: pick.optionId } : { outcome: 'cancelled' } } });
+    }
+    if (ev.method && ev.id != null) return ctx.send({ jsonrpc: '2.0', id: ev.id, error: { code: -32601, message: 'not supported by this client' } });
+    if (ev.method === 'session/update' && !A.loading) {
+      const u = (ev.params && ev.params.update) || {};
+      const txt = u.content && (u.content.text || (Array.isArray(u.content) ? u.content.map((c) => (c.content && c.content.text) || c.text || '').join('') : ''));
+      if (u.sessionUpdate === 'agent_message_chunk' && txt) { A.chunks += txt; ctx.live(txt); }
+      else if (u.sessionUpdate === 'agent_thought_chunk' && txt) { A.thought = clip((A.thought || '') + txt, 2000); ctx.think(A.thought.slice(-400)); }
+      else if (u.sessionUpdate === 'tool_call') ctx.step({ id: u.toolCallId, kind: u.kind === 'execute' ? 'cmd' : u.kind === 'edit' || u.kind === 'delete' || u.kind === 'move' ? 'edit' : 'tool', title: clip(u.title || u.kind || '도구', 140), status: 'running' });
+      else if (u.sessionUpdate === 'tool_call_update' && (u.status === 'completed' || u.status === 'failed')) ctx.stepDone(u.toolCallId, u.status === 'failed' ? 'error' : 'done');
+    }
+  },
+};
 const adapters = {
+  acp: acpAdapter,
   claude: {
     build(room, prompt, st, writer, mid) {
       const c = ac(room, mid);
@@ -1056,14 +1124,21 @@ async function pump(room) {
 async function runAgent(room, job, cur) {
   const agentId = job.agent;
   const a = { ...config.agents[eng(agentId)], name: P(agentId).name };
+  if (eng(agentId) === 'acp') a.command = splitCmd(P(agentId).acpCommand)[0] || '';
   const st = room.agentState[agentId] || (room.agentState[agentId] = {});
-  const writer = room.writer === agentId;
+  const blindRun = !!(job.debate && job.debate.blind && !job.debate.final);
+  const writer = room.writer === agentId && !(job.debate && job.debate.blind); // 블라인드 라운드는 정리까지 모두 읽기 전용
 
   const msg = { id: uid(), role: 'agent', agent: agentId, text: '', status: 'running', ts: now(), startedAt: now(), lastOutAt: null, activity: '준비 중', steps: [], writer };
   if (job.debate) msg.debate = { round: job.debate.round, total: job.debate.total, final: !!job.debate.final };
+  if (job.debate && job.debate.blind) msg.blind = { bid: job.debate.bid, final: !!job.debate.final };
   room.messages.push(msg);
   pushMessage(room, msg, true);
 
+  if (eng(agentId) === 'acp' && !(a.command && (a.command.includes('/') ? fs.existsSync(a.command) : hasTool(a.command)))) {
+    msg.status = 'error'; msg.errorHint = `${a.name}의 실행 명령을 찾을 수 없어요: ${a.command || '(비어 있음)'}. 우분투에 설치돼 있는지 확인해 주세요.`; msg.text = '⚠️ ' + msg.errorHint;
+    pushMessage(room, msg, true); return;
+  }
   if (!availability[eng(agentId)]) {
     msg.status = 'error'; msg.errorHint = `${josa(a.name, '이/가')} 설치되어 있지 않아요. (명령: ${a.command})`; msg.text = '⚠️ ' + msg.errorHint;
     pushMessage(room, msg, true); return;
@@ -1102,14 +1177,18 @@ async function runAgent(room, job, cur) {
     msg.status = 'stopped'; msg.text = '(중지됨)'; pushMessage(room, msg, true); return;
   }
 
-  room._debateNote = job.debate ? (job.debate.final
+  room._blind = blindRun ? job.debate.bid : null;
+  room._debateNote = job.debate && job.debate.blind ? (job.debate.final
+    ? '[시스템] 방금 여러 AI가 서로의 답을 보지 않고 같은 질문에 답했어(블라인드 라운드). 그 답들을 비교해서 ① 모두 같은 점 ② 서로 다른 점과 누구 근거가 더 탄탄한지 ③ 종합 결론을 짧게 정리해. "다음:" 줄은 쓰지 마.'
+    : '[시스템] 블라인드 라운드야. 다른 AI들도 같은 질문에 답하지만 서로의 답은 볼 수 없어. 남 눈치 보지 말고 네 판단을 근거와 함께 독립적으로 답해. 파일은 고치지 말고 "다음:" 줄과 <기억> 블록도 쓰지 마.') : job.debate ? (job.debate.final
     ? `[시스템] 토론 정리 담당이야. 지금까지 토론을 보고 ① 합의한 점 ② 남은 쟁점 ③ 결론·다음 할 일을 짧게 정리해. 합의한 점은 기존 방 기억과 합쳐서 <기억>…</기억> 블록으로 다시 써. "다음:" 줄은 쓰지 마.`
     : job.debate.first
       ? `[시스템] 토론 ${job.debate.round}/${job.debate.total}라운드, 네가 첫 발언자야. 주제에 대한 네 입장을 근거와 함께 먼저 제시해. 결론 내지 말고 "다음:" 줄도 쓰지 마.`
       : `[시스템] 토론 ${job.debate.round}/${job.debate.total}라운드야. 앞사람 의견에 동의할 건 짧게 인정하고, 반박하거나 보탤 것 위주로 네 입장을 말해. 결론 내지 말고 "다음:" 줄도 쓰지 마.`) : null;
   const prompt = buildPrompt(room, agentId, job.attachments || []);
-  room._debateNote = null;
-  const { args, stdin, env: extraEnv } = adapters[eng(agentId)].build(room, prompt, st, writer, agentId);
+  room._debateNote = null; room._blind = null;
+  const ad = adapters[eng(agentId)];
+  const { args, stdin, env: extraEnv, acp: acpInfo } = ad.build(room, prompt, st, writer, agentId);
 
   const texts = [];
   let finalText = null, errorText = null;
@@ -1136,10 +1215,16 @@ async function runAgent(room, job, cur) {
   };
 
   const env = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', TERM: 'dumb', ...(extraEnv || {}) };
-  const proc = spawn(a.command, args, { cwd: room.cwd, env, detached: true, stdio: [stdin != null ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+  const proc = spawn(a.command, args, { cwd: room.cwd, env, detached: true, stdio: [stdin != null || ad.interactive ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
   cur.proc = proc;
   trackPid(proc.pid, true);
   if (stdin != null) { proc.stdin.on('error', () => { }); proc.stdin.end(stdin); }
+  if (ad.interactive) {
+    proc.stdin.on('error', () => { });
+    ctx.send = (o) => { try { proc.stdin.write(JSON.stringify(o) + '\n'); } catch { } };
+    ctx.end = () => { ctx.endedOk = true; try { proc.stdin.end(); } catch { } setTimeout(() => { try { process.kill(-proc.pid, 'SIGTERM'); } catch { } }, 1500); };
+    ad.start(ctx, acpInfo);
+  }
 
   let buf = '', stderr = '';
   const idleMs = (config.idleTimeoutSec || 600) * 1000;
@@ -1162,7 +1247,7 @@ async function runAgent(room, job, cur) {
       if (!line) continue;
       let ev;
       try { ev = JSON.parse(line); } catch { continue; }
-      try { adapters[eng(agentId)].handle(ev, ctx); } catch (e) { console.error('이벤트 처리 오류', e); }
+      try { ad.handle(ev, ctx); } catch (e) { console.error('이벤트 처리 오류', e); }
     }
   });
   proc.stderr.on('data', (d) => { stderr = clip(stderr + d.toString('utf8'), 8000); });
@@ -1193,7 +1278,7 @@ async function runAgent(room, job, cur) {
   if (cur.stopped) {
     msg.status = 'stopped';
     if (!msg.text) msg.text = '(중지됨)';
-  } else if (errorText || code !== 0) {
+  } else if (errorText || (code !== 0 && !ctx.endedOk)) {
     msg.status = 'error';
     const detail = errorText || clip(stderr.trim().split('\n').slice(-6).join('\n'), 800) || `종료 코드 ${code}`;
     msg.errorHint = friendlyError(agentId, detail + '\n' + stderr) || null;
@@ -1222,6 +1307,7 @@ async function runAgent(room, job, cur) {
   logAct(room, agentId, 'turn', `${{ done: '완료', error: '실패', stopped: '중지' }[msg.status] || msg.status}${msg.errorHint ? ' · ' + msg.errorHint : ''} · ${Math.round((now() - msg.startedAt) / 1000)}초`);
   msg.doneAt = now();
   pushMessage(room, msg, true);
+  try { tgOnAgentMsg(room, msg); } catch { }
 
   // 다른 AI 호출 (자동 턴)
   if (msg.status === 'done') {
@@ -1235,6 +1321,127 @@ async function runAgent(room, job, cur) {
     }
   }
 }
+
+// ---------- 텔레그램 (폰에서 방에 말하고 승인하기) ----------
+const TG_FILE = path.join(DATA, 'telegram.json');
+const TG_API = process.env.AGENT_ROOM_TG_API || 'https://api.telegram.org';
+let tg = {}; try { tg = JSON.parse(fs.readFileSync(TG_FILE, 'utf8')); } catch { }
+let tgGen = 0, tgErr = null, tgChain = Promise.resolve(); const tgCb = new Map(); let tgCbN = 0;
+const tgSave = () => { try { fs.writeFileSync(TG_FILE, JSON.stringify(tg), { mode: 0o600 }); } catch { } };
+async function tgCall(method, params, timeout = 20000) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeout);
+  try {
+    const r = await fetch(`${TG_API}/bot${tg.token}/${method}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(params || {}), signal: ctl.signal });
+    const j = await r.json(); if (!j.ok) throw new Error(j.description || ('telegram ' + r.status)); return j.result;
+  } finally { clearTimeout(t); }
+}
+function tgSend(text, keyboard) {
+  if (!tg.token || !tg.chatId) return;
+  const chunks = []; let t = String(text || ''); while (t.length > 3800) { let cut = t.lastIndexOf('\n', 3800); if (cut < 1000) cut = 3800; chunks.push(t.slice(0, cut)); t = t.slice(cut); } chunks.push(t);
+  chunks.forEach((c, i) => { tgChain = tgChain.then(() => tgCall('sendMessage', { chat_id: tg.chatId, text: c, disable_web_page_preview: true, ...(keyboard && i === chunks.length - 1 ? { reply_markup: { inline_keyboard: keyboard } } : {}) })).catch((e) => { tgErr = e.message; }); });
+}
+const tgKey = (payload) => { const k = 'k' + (++tgCbN).toString(36); tgCb.set(k, payload); if (tgCb.size > 500) tgCb.delete(tgCb.keys().next().value); return k; };
+function tgRoom() { return rooms.get(tg.roomId) || [...rooms.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || null; }
+function tgStatus() { const r = tgRoom(); return { connected: !!tg.token, bot: tg.botName || null, paired: !!tg.chatId, code: tg.chatId ? null : tg.code || null, roomId: r ? r.id : null, all: !!tg.all, error: tgErr }; }
+const TG_HELP = '이렇게 써요\n· 그냥 글을 보내면 연결된 방에 전달돼요. @이름으로 부르는 것도 똑같아요\n· 사진·파일을 보내면 첨부로 들어가요\n/방 — 방 고르기\n/상태 — 지금 누가 일하는지\n/중지 — 작업 멈추기\n/전체 — 모든 방 알림 켜기/끄기';
+function tgOnAgentMsg(room, msg) {
+  if (!tg.token || !tg.chatId) return;
+  const cur = tgRoom(); const here = cur && cur.id === room.id;
+  if (!here && !tg.all) return;
+  const p = P(msg.agent); const head = `${p.emoji || '🤖'} ${p.name}${here ? '' : ' · ' + room.title}`;
+  let body = msg.status === 'error' ? '⚠️ ' + (msg.errorHint || '실패했어요') : msg.text || '';
+  let kb = null;
+  if (msg.changes && msg.changes.length && msg.checkpoint && !msg.unexpected) {
+    body += '\n\n📝 바뀐 파일: ' + clip(msg.changes.map((f) => f.path).join(', '), 400);
+    const k = (act) => tgKey({ act, roomId: room.id, msgId: msg.id });
+    kb = [[{ text: '✅ 승인', callback_data: k('ap') }, { text: '↩️ 반려', callback_data: k('rj') }, { text: '⏪ 되돌리기', callback_data: k('rv') }]];
+  }
+  tgSend(head + '\n' + body, kb);
+}
+async function tgAttach(room, fileId, name) {
+  const f = await tgCall('getFile', { file_id: fileId });
+  const r = await fetch(`${TG_API}/file/bot${tg.token}/${f.file_path}`); const buf = Buffer.from(await r.arrayBuffer());
+  const nm = path.basename(name || f.file_path || 'file').replace(/[^\w.\-가-힣]/g, '_').slice(-80);
+  const dir = path.join(UPLOADS, room.id); fs.mkdirSync(dir, { recursive: true });
+  const fp = path.join(dir, Date.now().toString(36) + '-' + nm); fs.writeFileSync(fp, buf);
+  const u = { id: uid(), name: nm, path: fp, size: buf.length, isImage: /\.(png|jpe?g|gif|webp)$/i.test(nm) };
+  (room.uploads || (room.uploads = [])).push(u); saveRoom(room); return u.id;
+}
+async function tgHandle(u) {
+  if (u.callback_query) {
+    const q = u.callback_query; const from = q.message && q.message.chat && q.message.chat.id;
+    if (from !== tg.chatId) return;
+    const c = tgCb.get(q.data); let note = '처리했어요';
+    if (!c) note = '오래된 버튼이에요. 앱에서 처리해 주세요.';
+    else if (c.act === 'room') { tg.roomId = c.roomId; tgSave(); const r = rooms.get(c.roomId); note = r ? `"${r.title}" 방으로 바꿨어요` : '없는 방이에요'; tgSend('📍 ' + note); }
+    else {
+      const room = rooms.get(c.roomId); const m0 = room && room.messages.find((x) => x.id === c.msgId);
+      if (!m0) note = '그 작업을 찾을 수 없어요';
+      else if (c.act === 'ap') { m0.review = 'approved'; pushMessage(room, m0, true); logAct(room, m0.agent, 'approve', '텔레그램'); const sm = systemMsg(room, `${P(m0.agent).name}의 작업을 승인했어요.`); sm.forAgents = true; note = '승인했어요'; }
+      else if (c.act === 'rj') { tg.pendingReject = { roomId: room.id, msgId: m0.id }; note = '반려 이유를 보내주세요'; tgSend('↩️ 반려 이유를 한 줄로 보내주세요. 그대로 다음 지시가 돼요.'); }
+      else if (c.act === 'rv') {
+        if (runtime(room.id).current) note = '작업 중에는 되돌릴 수 없어요';
+        else { const r = await revertTo(room, m0.checkpoint, m0.checkpointCwd || room.cwd);
+          if (r.ok) { logAct(room, m0.agent, 'revert', '텔레그램'); const sm = systemMsg(room, '파일을 그 작업 전 상태로 되돌렸어요.'); sm.forAgents = true; sm.undoCheckpoint = r.undo; sm.undoCwd = room.cwd; pushMessage(room, sm, true); note = '되돌렸어요'; tgSend('⏪ 되돌렸어요. 취소는 앱에서 할 수 있어요.'); }
+          else note = '되돌리기 실패: ' + r.error; }
+      }
+    }
+    return tgCall('answerCallbackQuery', { callback_query_id: q.id, text: clip(note, 180) }).catch(() => { });
+  }
+  const m = u.message; if (!m || !m.chat || m.chat.type !== 'private') return;
+  const text = String(m.text || m.caption || '').trim();
+  if (!tg.chatId) {
+    if (tg.code && text.replace(/\D/g, '') === tg.code) { tg.chatId = m.chat.id; tg.code = null; tgSave(); broadcast({ type: 'telegram' }); const r = tgRoom(); tgSend(`✅ Agent Room과 연결됐어요.${r ? ' 지금 방: "' + r.title + '"' : ''}\n\n` + TG_HELP); }
+    else tgCall('sendMessage', { chat_id: m.chat.id, text: 'Agent Room 앱의 텔레그램 화면에 보이는 연결 코드 6자리를 보내주세요.' }).catch(() => { });
+    return;
+  }
+  if (m.chat.id !== tg.chatId) return; // 주인 말고는 무시
+  const cmd = (text.match(/^\/(\S+)/) || [])[1];
+  if (cmd && /^(start|help|도움)/.test(cmd)) return tgSend(TG_HELP);
+  if (cmd && /^(방|rooms?)/.test(cmd)) {
+    const list = [...rooms.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 12); const cur = tgRoom();
+    return tgSend('어느 방으로 보낼까요?', list.map((r) => [{ text: (cur && cur.id === r.id ? '📍 ' : '') + clip(r.title, 40), callback_data: tgKey({ act: 'room', roomId: r.id }) }]));
+  }
+  if (cmd && /^(전체|all)/.test(cmd)) { tg.all = !tg.all; tgSave(); return tgSend(tg.all ? '🔔 모든 방의 답을 보내드릴게요.' : '🔕 연결된 방의 답만 보내드릴게요.'); }
+  const room = tgRoom();
+  if (!room) return tgSend('아직 방이 없어요. 앱에서 방을 먼저 만들어 주세요.');
+  if (cmd && /^(상태|status)/.test(cmd)) { const rt = runtime(room.id); return tgSend(`📍 ${room.title}\n` + (rt.current ? `${P(rt.current.agent).name} 작업 중` + (rt.queue.length ? ` · 대기 ${rt.queue.map((q) => P(q.agent).name).join(', ')}` : '') : '쉬는 중') + `\n멤버: ${enabledAgents(room).map((a) => P(a).name).join(', ')}\n작성 권한: ${room.writer ? P(room.writer).name : '없음'}`); }
+  if (cmd && /^(중지|stop)/.test(cmd)) { stopRoom(room); return tgSend('⏹ 멈췄어요.'); }
+  if (tg.pendingReject && text) {
+    const pr = tg.pendingReject; tg.pendingReject = null; const r2 = rooms.get(pr.roomId); const m0 = r2 && r2.messages.find((x) => x.id === pr.msgId);
+    if (m0) { m0.review = 'rejected'; pushMessage(r2, m0, true); logAct(r2, m0.agent, 'reject', clip(text, 200)); r2._via = 'telegram'; postUser(r2, `@${P(m0.agent).name} 반려: ${text}`, []); return; }
+  }
+  const ids = [];
+  try {
+    if (m.photo && m.photo.length) ids.push(await tgAttach(room, m.photo[m.photo.length - 1].file_id, 'photo.jpg'));
+    if (m.document) ids.push(await tgAttach(room, m.document.file_id, m.document.file_name));
+  } catch (e) { tgSend('첨부 파일을 받지 못했어요: ' + e.message); }
+  if (!text && !ids.length) return;
+  room._via = 'telegram';
+  postUser(room, text || '(첨부 파일)', ids);
+}
+async function tgLoop(gen) {
+  while (gen === tgGen && tg.token) {
+    try {
+      const ups = await tgCall('getUpdates', { offset: tg.offset || 0, timeout: 25, allowed_updates: ['message', 'callback_query'] }, 40000);
+      if (gen !== tgGen) return; tgErr = null;
+      for (const u of ups) { tg.offset = u.update_id + 1; try { await tgHandle(u); } catch (e) { console.error('텔레그램 처리 오류', e.message); } }
+      if (ups.length) tgSave();
+    } catch (e) { if (gen !== tgGen) return; tgErr = /Unauthorized|Not Found/i.test(e.message) ? '토큰이 맞지 않아요' : '텔레그램에 연결하지 못했어요 (' + clip(e.message, 80) + ')'; await new Promise((r) => setTimeout(r, 5000)); }
+  }
+}
+function tgStart() { tgGen++; if (tg.token) tgLoop(tgGen); }
+
+// ---------- 방 템플릿 ----------
+const TPL_FILE = path.join(DATA, 'templates.json');
+const PRESET_TEMPLATES = [
+  { id: 'seminar', emoji: '🎤', name: '세미나 준비', description: '주제 토론 → 구성 합의 → 슬라이드', teamId: 'panel4', mode: 'debate', memo: '목표: 세미나 발표 자료를 만든다.\n순서: ① 청중과 핵심 메시지 합의 ② 목차 합의 ③ 슬라이드 초안(HTML) ④ 검토.\n합의한 내용은 방 기억에 남긴다.', kickoff: '세미나 주제: (여기에 주제)\n청중: (누구)\n시간: (몇 분)\n\n먼저 청중이 가장 궁금해할 것과 핵심 메시지 3가지를 토론해줘.' },
+  { id: 'proposal', emoji: '📄', name: '제안서 작성', description: '고객 상황 → 해결안 → 숫자 → 문서', teamId: 'panel4', mode: 'normal', memo: '목표: 고객 맞춤 제안서를 만든다.\n순서: ① 고객 상황·문제 정리 ② 해결안과 제품 구성 ③ 비용·절감 효과 계산 ④ 문서 작성.\n숫자에는 가정과 출처를 적는다.', kickoff: '고객사: (이름·업종)\n현재 상황: (알고 있는 것)\n제안할 것: (제품·범위)\n\n@마커스 먼저 이 고객에게 통할 제안의 뼈대를 잡아줘.' },
+  { id: 'compare', emoji: '⚖️', name: '경쟁사 비교', description: '서로 안 보고 답한 뒤 비교', teamId: 'panel4', mode: 'blind', memo: '목표: 우리 제품과 경쟁 제품을 공정하게 비교한다.\n확인 안 된 내용은 추측이라고 밝힌다. 약점도 숨기지 않는다.', kickoff: '비교 대상: (우리 제품) vs (경쟁 제품)\n\n기능, 가격, 설치·유지, 통신 호환성 관점에서 어디가 더 나은지 각자 판단해줘.' },
+  { id: 'research', emoji: '🔎', name: '고객사 사전조사', description: '방문 전 빠른 조사와 질문 준비', teamId: 'panel4', mode: 'normal', memo: '목표: 고객 방문 전에 알아야 할 것과 물어볼 것을 정리한다.\n결과: 회사 개요, 예상 공정·설비, 기회 포인트, 현장에서 물어볼 질문 10개.', kickoff: '방문할 고객사: (이름·지역)\n만날 사람: (부서·직급)\n\n@헌터 이 회사에 대해 찾을 수 있는 것부터 정리해줘.' },
+];
+let templates = []; try { templates = JSON.parse(fs.readFileSync(TPL_FILE, 'utf8')); } catch { templates = PRESET_TEMPLATES.map((t) => ({ ...t, preset: true })); }
+const saveTemplates = () => fs.writeFileSync(TPL_FILE, JSON.stringify(templates, null, 1));
 
 const TERMUX_NOTIFY = '/data/data/com.termux/files/usr/bin/termux-notification';
 function notifyText(title, body) {
@@ -1286,6 +1493,7 @@ function stopRoom(room) {
 function postUser(room, text, attachIds, debate) {
   const attachments = (attachIds || []).map((id) => (room.uploads || []).find((u) => u.id === id)).filter(Boolean);
   const m = { id: uid(), role: 'user', text, ts: now(), attachments };
+  if (room._via) { m.via = room._via; room._via = null; }
   room.messages.push(m);
   pushMessage(room, m, true);
   let targets = parseMentions(text);
@@ -1298,7 +1506,19 @@ function postUser(room, text, attachIds, debate) {
     const pick = [room.lastAgent, room.defaultAgent, ...on].find((a) => a && on.includes(a));
     if (pick) targets = [pick];
   }
-  if (debate && Array.isArray(debate.participants)) {
+  if (debate && debate.blind && Array.isArray(debate.participants)) {
+    const parts = debate.participants.filter((t) => on.includes(t) && availability[eng(t)]);
+    const sum = on.includes(debate.summarizer) ? debate.summarizer : null;
+    if (parts.length >= 2) {
+      const bid = uid();
+      m.blind = { bid, participants: parts, summarizer: sum }; pushMessage(room, m, true);
+      parts.forEach((t) => enqueue(room, t, 0, attachments, { blind: true, bid, round: 1, total: 1 }));
+      if (sum) enqueue(room, sum, 0, [], { blind: true, bid, final: true, round: 1, total: 1 });
+      room.lastAgent = sum || parts[parts.length - 1];
+      pushRoom(room); return m;
+    }
+    systemMsg(room, '블라인드 라운드는 참여 중인 AI가 2명 이상 있어야 해요.');
+  } else if (debate && Array.isArray(debate.participants)) {
     const parts = debate.participants.filter((t) => on.includes(t) && availability[eng(t)]);
     const rounds = Math.max(1, Math.min(4, +debate.rounds || 2));
     const sum = on.includes(debate.summarizer) ? debate.summarizer : null;
@@ -1340,7 +1560,9 @@ function authed(req, url) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-function newRoom({ title, cwd, teamId }) {
+function newRoom({ title, cwd, teamId, templateId }) {
+  const tpl = templateId && templates.find((t) => t.id === templateId);
+  if (tpl && !teamId) teamId = tpl.teamId;
   const room = {
     id: uid(), title: (title || '').trim() || '새 방', cwd: cwd || os.homedir(),
     writer: null, autoTurns: config.autoTurns ?? 3, defaultAgent: config.defaultAgent || ENGINES[0],
@@ -1352,6 +1574,7 @@ function newRoom({ title, cwd, teamId }) {
     room.teamName = team.name; room.teamInstructions = team.instructions || '';
     room.defaultAgent = room.members[0] || room.defaultAgent;
   }
+  if (tpl) { room.memo = tpl.memo || ''; room.templateName = tpl.name; if (tpl.members && tpl.members.length && !room.members) room.members = tpl.members.filter(isMemberId); }
   rooms.set(room.id, room);
   saveRoom(room, true);
   return room;
@@ -1391,7 +1614,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, {
         home: os.homedir(),
         version: VERSION,
-        agents: personas.map((p) => { const f = path.join(AVATARS, p.id); return { id: p.id, name: p.name, color: p.color, emoji: p.emoji || '', engine: p.engine, model: p.model || '', description: p.description || '', systemPrompt: p.systemPrompt || '', builtin: !!p.builtin, know: knowList(p.id).length, available: !!availability[p.engine], avatar: fs.existsSync(f) ? fs.statSync(f).mtimeMs : 0 }; }),
+        agents: personas.map((p) => { const f = path.join(AVATARS, p.id); return { id: p.id, name: p.name, color: p.color, emoji: p.emoji || '', engine: p.engine, model: p.model || '', description: p.description || '', systemPrompt: p.systemPrompt || '', acpCommand: p.acpCommand || '', builtin: !!p.builtin, know: knowList(p.id).length, available: !!availability[p.engine], avatar: fs.existsSync(f) ? fs.statSync(f).mtimeMs : 0 }; }),
         teams,
         rooms: [...rooms.values()].sort((a, b) => b.updatedAt - a.updatedAt).map(roomSummary),
       });
@@ -1429,9 +1652,10 @@ const server = http.createServer(async (req, res) => {
         for (const t of teams) t.personaIds = t.personaIds.filter((x) => x !== b.remove);
         savePersonas(); broadcast({ type: 'personas' }); return send(res, 200, { ok: true });
       }
-      if (!ENGINES.includes(b.engine)) return send(res, 400, { error: '엔진을 골라주세요' });
+      if (!ALL_ENGINES().includes(b.engine)) return send(res, 400, { error: '엔진을 골라주세요' });
+      if (b.engine === 'acp' && !splitCmd(b.acpCommand).length) return send(res, 400, { error: 'ACP 에이전트를 실행할 명령을 적어주세요 (예: gemini --experimental-acp)' });
       if (!clean(b.name, 30).trim()) return send(res, 400, { error: '이름을 적어주세요' });
-      const fields = { name: clean(b.name, 30).trim(), emoji: clean(b.emoji, 8), color: /^#[0-9a-fA-F]{6}$/.test(b.color || '') ? b.color : '#6B7280', engine: b.engine, model: clean(b.model, 120), effort: clean(b.effort, 20), description: clean(b.description, 120), systemPrompt: clean(b.systemPrompt, 4000) };
+      const fields = { name: clean(b.name, 30).trim(), emoji: clean(b.emoji, 8), color: /^#[0-9a-fA-F]{6}$/.test(b.color || '') ? b.color : '#6B7280', engine: b.engine, model: clean(b.model, 120), effort: clean(b.effort, 20), description: clean(b.description, 120), systemPrompt: clean(b.systemPrompt, 4000), acpCommand: b.engine === 'acp' ? clean(b.acpCommand, 300).trim() : '' };
       let pp = b.id && personas.find((x) => x.id === b.id);
       if (pp) { if (pp.builtin) { fields.engine = pp.engine; } Object.assign(pp, fields, { updatedAt: now() }); }
       else { pp = { id: 'p' + uid().slice(-8), ...fields, createdAt: now() }; personas.push(pp); }
@@ -1452,6 +1676,35 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/activity' && req.method === 'GET') {
       const roomF = url.searchParams.get('room'); const lim = Math.min(1000, +(url.searchParams.get('limit') || 300));
       return send(res, 200, readActivity(roomF, lim));
+    }
+    if (p === '/api/telegram' && req.method === 'GET') return send(res, 200, tgStatus());
+    if (p === '/api/telegram' && req.method === 'POST') {
+      const b = await readJSON(req);
+      if (b.disconnect) { tg = {}; tgErr = null; tgSave(); tgStart(); broadcast({ type: 'telegram' }); return send(res, 200, tgStatus()); }
+      if (b.token != null) {
+        const token = String(b.token).trim();
+        if (!/^\d+:[\w-]{20,}$/.test(token)) return send(res, 400, { error: '토큰 모양이 아니에요. BotFather가 준 "숫자:글자" 전체를 붙여넣어 주세요.' });
+        const prev = tg; tg = { token };
+        try { const me = await tgCall('getMe', {}, 15000); tg.botName = me.username; }
+        catch (e) { tg = prev; return send(res, 400, { error: /Unauthorized|Not Found/i.test(e.message) ? '토큰이 맞지 않아요. 다시 복사해 주세요.' : '텔레그램에 연결하지 못했어요: ' + clip(e.message, 100) }); }
+        tg.code = String(crypto.randomInt(100000, 1000000)); tgErr = null; tgSave(); tgStart(); logAct(null, null, 'telegram', '봇 연결: @' + tg.botName);
+      }
+      if (b.roomId && rooms.has(b.roomId)) { tg.roomId = b.roomId; tgSave(); }
+      if (b.all != null) { tg.all = !!b.all; tgSave(); }
+      if (b.test && tg.chatId) tgSend('🔔 Agent Room 테스트 메시지예요.');
+      return send(res, 200, tgStatus());
+    }
+    if (p === '/api/templates' && req.method === 'GET') return send(res, 200, templates);
+    if (p === '/api/templates' && req.method === 'POST') {
+      const b = await readJSON(req);
+      if (b.remove) { templates = templates.filter((t) => t.id !== b.remove); saveTemplates(); return send(res, 200, templates); }
+      const c = (v, n) => String(v == null ? '' : v).slice(0, n);
+      let f = { name: c(b.name, 40).trim(), emoji: c(b.emoji, 8), description: c(b.description, 120), teamId: teams.some((t) => t.id === b.teamId) ? b.teamId : '', mode: ['debate', 'blind'].includes(b.mode) ? b.mode : 'normal', memo: c(b.memo, 2000), kickoff: c(b.kickoff, 2000) };
+      if (b.fromRoom && rooms.has(b.fromRoom)) { const r = rooms.get(b.fromRoom); f.memo = f.memo || r.memo || ''; f.members = roomMembers(r); f.teamId = ''; }
+      if (!f.name) return send(res, 400, { error: '템플릿 이름을 적어주세요' });
+      let t = b.id && templates.find((x) => x.id === b.id);
+      if (t) Object.assign(t, f); else { t = { id: 'tp' + uid().slice(-8), ...f }; templates.push(t); }
+      saveTemplates(); return send(res, 200, templates);
     }
     if (p === '/api/manager' && req.method === 'GET') return send(res, 200, await managerStatus());
     if (p === '/api/manager/token' && req.method === 'POST') {
@@ -1824,6 +2077,7 @@ checkAgents().then(() => {
       const share = path.dirname(process.env.AGENT_ROOM_URL_FILE);
       for (const f of ['start.sh', 'stop.sh']) { try { fs.copyFileSync(path.join(APP_DIR, f), path.join(share, f)); } catch { } } try { fs.writeFileSync(process.env.AGENT_ROOM_URL_FILE, link + '\n', { mode: 0o600 }); } catch (e) { console.error('주소 파일 쓰기 실패', e.message); } }
     console.log('Agent Room 실행 중:', link);
+    tgStart();
     console.log('설치 확인:', AGENT_IDS.map((id) => `${config.agents[id].name} ${availability[id] ? 'O' : 'X'}`).join(' · '));
   });
 });

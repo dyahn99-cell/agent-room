@@ -5,7 +5,7 @@ const fs = require('fs'), path = require('path'), os = require('os');
 const ROOT = path.resolve(__dirname, '..');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'ar-test-'));
 const BIN = path.join(TMP, 'bin'); fs.mkdirSync(BIN);
-for (const k of ['claude', 'codex', 'opencode']) fs.symlinkSync(path.join(__dirname, 'mock-agent.js'), path.join(BIN, k));
+for (const k of ['claude', 'codex', 'opencode', 'acpagent']) fs.symlinkSync(path.join(__dirname, 'mock-agent.js'), path.join(BIN, k));
 fs.chmodSync(path.join(__dirname, 'mock-agent.js'), 0o755);
 const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.default.json')));
 for (const k in cfg.agents) cfg.agents[k].command = path.join(BIN, k);
@@ -30,7 +30,22 @@ const newRoom = async (title, cwd, teamId) => (await api('/api/rooms', { method:
   fs.mkdirSync(path.join(SEED, 'replies')); fs.writeFileSync(path.join(SEED, 'replies', '.keep'), '');
   const G = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a]).toString();
   G(SEED, 'add', '-A'); G(SEED, 'commit', '-qm', 'init'); G(SEED, 'push', '-q', BARE, 'inbox');
-  const srv = spawn('node', [path.join(ROOT, 'server.js')], { env: { ...process.env, AGENT_ROOM_NO_APT: '1', AGENT_ROOM_INBOX_REMOTE: BARE, AGENT_ROOM_CONFIG: path.join(TMP, 'config.json'), AGENT_ROOM_DATA: DATA, MOCK_LOG: LOG, AGENT_ROOM_TEST_SNAPSHOT_DELAY: '800', CODEX_HOME: path.join(TMP, 'codexhome') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  // 가짜 텔레그램 서버
+  const TG = { updates: [], sent: [], answers: [], n: 1 };
+  const tgPush = (u) => { TG.updates.push({ update_id: TG.n++, ...u }); };
+  const tgSrv = require('http').createServer(async (req, res) => {
+    let body = ''; for await (const c of req) body += c;
+    const mm = req.url.match(/^\/bot([^/]+)\/(\w+)/); const j = (o) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+    if (!mm) { res.writeHead(404); return res.end(); }
+    if (mm[1] !== '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ') return j({ ok: false, description: 'Unauthorized' });
+    const b = body ? JSON.parse(body) : {};
+    if (mm[2] === 'getMe') return j({ ok: true, result: { username: 'my_room_bot' } });
+    if (mm[2] === 'sendMessage') { TG.sent.push(b); return j({ ok: true, result: {} }); }
+    if (mm[2] === 'answerCallbackQuery') { TG.answers.push(b); return j({ ok: true, result: true }); }
+    if (mm[2] === 'getUpdates') { for (let i = 0; i < 6; i++) { const u = TG.updates.filter((x) => x.update_id >= (b.offset || 0)); if (u.length) return j({ ok: true, result: u }); await sleep(50); } return j({ ok: true, result: [] }); }
+    j({ ok: true, result: {} });
+  }).listen(8792, '127.0.0.1');
+  const srv = spawn('node', [path.join(ROOT, 'server.js')], { env: { ...process.env, AGENT_ROOM_NO_APT: '1', AGENT_ROOM_TG_API: 'http://127.0.0.1:8792', AGENT_ROOM_INBOX_REMOTE: BARE, AGENT_ROOM_CONFIG: path.join(TMP, 'config.json'), AGENT_ROOM_DATA: DATA, MOCK_LOG: LOG, AGENT_ROOM_TEST_SNAPSHOT_DELAY: '800', CODEX_HOME: path.join(TMP, 'codexhome') }, stdio: ['ignore', 'pipe', 'pipe'] });
   let srvOut = ''; srv.stdout.on('data', (d) => srvOut += d); srv.stderr.on('data', (d) => srvOut += d);
   for (let i = 0; i < 50 && !fs.existsSync(path.join(DATA, 'url.txt')); i++) await sleep(100);
   TOK = fs.readFileSync(path.join(DATA, 'token'), 'utf8').trim();
@@ -275,7 +290,100 @@ const newRoom = async (title, cwd, teamId) => (await api('/api/rooms', { method:
       await fetch(B + '/api/knowledge/ledger?name=' + encodeURIComponent('단가표.txt'), { method: 'DELETE', headers: { 'x-token': TOK } });
       const k2 = (await api('/api/knowledge/ledger')).body;
       check('자료 빼기', !k2.files.some((f) => f.name === '단가표.txt'), JSON.stringify(k2.files)); }
+    // 23. 블라인드 라운드
+    { const d = W('blind'); const rid = await newRoom('블라인드', d, 'panel4');
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ writer: 'marcus' }) });
+      fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '어느 쪽이 나아?', debate: { blind: true, participants: ['marcus', 'ledger'], summarizer: 'marcus' } }) });
+      const r = await idle(rid);
+      const log = fs.readFileSync(LOG, 'utf8').split('===== ').filter((x) => x.trim());
+      const ag = r.messages.filter((x) => x.role === 'agent');
+      check('블라인드: 참가자 둘 + 정리 순서', ag.map((x) => x.agent).join(',') === 'marcus,ledger,marcus' && ag[2].blind.final && ag[0].blind.bid === ag[1].blind.bid, ag.map((x) => x.agent).join(','));
+      check('블라인드: 뒷사람이 앞사람 답을 못 봄', log[1] && log[1].includes('블라인드 라운드야') && !log[1].includes('[마커스]'), (log[1] || '').slice(0, 200));
+      check('블라인드: 모두 읽기 전용', /writer=false/.test(log[0]) && /writer=false/.test(log[1]) && !fs.existsSync(path.join(d, 'hello-claude.txt')), 'writer ran');
+      check('블라인드: 정리 담당은 모든 답을 봄', log[2] && log[2].includes('[레저]') && log[2].includes('비교해서'), (log[2] || '').slice(-700));
+      fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@레저 이어서' }) }); await idle(rid);
+      const lg = fs.readFileSync(LOG, 'utf8');
+      check('블라인드가 끝나면 가려졌던 답을 나중에 보여줌', lg.includes('[마커스] 클로드입니다'), lg.slice(0, 300)); }
+    // 24. ACP 엔진 전문가
+    { const d = W('acp'); const rid = await newRoom('ACP', d);
+      const bad = await api('/api/personas', { method: 'POST', body: JSON.stringify({ name: '빈명령', engine: 'acp' }) });
+      const pr = (await api('/api/personas', { method: 'POST', body: JSON.stringify({ name: '제미나이', engine: 'acp', acpCommand: path.join(BIN, 'acpagent') + ' --experimental-acp', systemPrompt: '너는 제미나이야.' }) })).body;
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ members: ['claude', pr.id] }) });
+      fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@제미나이 안녕' }) });
+      const r = await idle(rid); const m = r.messages.filter((x) => x.role === 'agent').pop();
+      const lg = fs.readFileSync(LOG, 'utf8');
+      check('ACP: 명령 없으면 저장 거절', bad.status === 400, bad.status);
+      check('ACP 에이전트가 답함', m.agent === pr.id && m.status === 'done' && m.text === 'ACP 에이전트입니다. 쓰기는 거절당했어요.' && lg.includes('--experimental-acp') && lg.includes('너는 제미나이야.'), JSON.stringify([m.status, m.text]));
+      check('ACP: 읽기 전용이면 쓰기 요청 거절', m.steps.some((x) => /^거절: Write notes/.test(x.title)) && m.steps.some((x) => /Read README/.test(x.title)) && !fs.existsSync(path.join(d, 'notes.txt')), JSON.stringify(m.steps.map((x) => x.title)));
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ writer: pr.id }) });
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@제미나이 써줘' }) });
+      const r2 = await idle(rid); const m2 = r2.messages.filter((x) => x.role === 'agent').pop();
+      check('ACP: 작성 권한이 있으면 허용 + 변경 기록', m2.text.includes('파일을 썼어요') && fs.existsSync(path.join(d, 'notes.txt')) && (m2.changes || []).some((f) => f.path === 'notes.txt'), JSON.stringify([m2.text, m2.changes]));
+      await api('/api/personas', { method: 'POST', body: JSON.stringify({ id: pr.id, name: '제미나이', engine: 'acp', acpCommand: 'no-such-agent-xyz --acp' }) });
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@제미나이 다시' }) });
+      const r3 = await idle(rid); const m3 = r3.messages.filter((x) => x.role === 'agent').pop();
+      check('ACP: 없는 명령이면 바로 안내', m3.status === 'error' && /실행 명령을 찾을 수 없어요/.test(m3.errorHint || ''), m3.errorHint); }
+    // 25. 텔레그램
+    { const d = W('tg'); const rid = await newRoom('폰방', d); const d2 = W('tg2'); const rid2 = await newRoom('다른방', d2);
+      const wait = async (fn) => { for (let i = 0; i < 60; i++) { if (fn()) return true; await sleep(100); } return false; };
+      const badTok = await api('/api/telegram', { method: 'POST', body: JSON.stringify({ token: '999999:ZZZZZZZZZZZZZZZZZZZZZZZZZZ' }) });
+      const c = (await api('/api/telegram', { method: 'POST', body: JSON.stringify({ token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ' }) })).body;
+      check('텔레그램: 틀린 토큰 거절, 맞는 토큰은 연결 코드 발급', badTok.status === 400 && c.connected && c.bot === 'my_room_bot' && /^\d{6}$/.test(c.code) && !c.paired, JSON.stringify([badTok.status, c]));
+      check('텔레그램: 토큰은 화면에 다시 내보내지 않음', !JSON.stringify(c).includes('ABCDEFG') && !JSON.stringify((await api('/api/state')).body).includes('ABCDEFG'), 'leak');
+      await api('/api/telegram', { method: 'POST', body: JSON.stringify({ roomId: rid }) });
+      tgPush({ message: { chat: { id: 666, type: 'private' }, text: '@클로드 남의 폰이야' } });
+      tgPush({ message: { chat: { id: 777, type: 'private' }, text: c.code } });
+      await wait(() => TG.sent.some((x) => x.chat_id === 777 && /연결됐어요/.test(x.text)));
+      const st = (await api('/api/telegram')).body;
+      check('텔레그램: 코드를 보낸 폰만 주인이 됨', st.paired && TG.sent.some((x) => x.chat_id === 666 && /연결 코드/.test(x.text)) && !(await room(rid)).messages.some((x) => /남의 폰/.test(x.text)), JSON.stringify(st));
+      tgPush({ message: { chat: { id: 666, type: 'private' }, text: '@클로드 몰래 시키기' } });
+      tgPush({ message: { chat: { id: 777, type: 'private' }, text: '@클로드 폰에서 안녕' } });
+      await wait(() => TG.sent.some((x) => /클로드\n클로드입니다/.test(x.text)));
+      const r = await idle(rid);
+      check('텔레그램: 폰에서 보낸 글이 방에 들어가고 답이 폰으로 옴', r.messages.some((x) => x.role === 'user' && x.via === 'telegram' && x.text === '@클로드 폰에서 안녕') && TG.sent.some((x) => x.chat_id === 777 && /클로드입니다/.test(x.text)), JSON.stringify(TG.sent.slice(-2)));
+      check('텔레그램: 주인이 아닌 사람 글은 무시', !r.messages.some((x) => /몰래/.test(x.text)), 'intruder');
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ writer: 'claude' }) });
+      tgPush({ message: { chat: { id: 777, type: 'private' }, text: '@클로드 고쳐줘' } });
+      await wait(() => TG.sent.some((x) => x.reply_markup && /바뀐 파일/.test(x.text)));
+      const withKb = TG.sent.filter((x) => x.reply_markup).pop();
+      const kb = withKb ? withKb.reply_markup.inline_keyboard[0] : [];
+      await idle(rid);
+      tgPush({ callback_query: { id: 'q1', data: kb[2] && kb[2].callback_data, message: { chat: { id: 777 } } } });
+      await wait(() => TG.answers.some((x) => x.callback_query_id === 'q1'));
+      check('텔레그램: 되돌리기 버튼이 실제로 파일을 되돌림', kb.length === 3 && !fs.existsSync(path.join(d, 'hello-claude.txt')) && /되돌렸어요/.test((TG.answers.find((x) => x.callback_query_id === 'q1') || {}).text || ''), JSON.stringify([kb.length, TG.answers]));
+      tgPush({ callback_query: { id: 'q2', data: kb[1] && kb[1].callback_data, message: { chat: { id: 777 } } } });
+      await wait(() => TG.answers.some((x) => x.callback_query_id === 'q2'));
+      tgPush({ message: { chat: { id: 777, type: 'private' }, text: '색을 파랑으로' } });
+      await wait(() => false === true || TG.sent.filter((x) => /클로드입니다/.test(x.text)).length >= 3);
+      const r4 = await idle(rid);
+      check('텔레그램: 반려 이유가 다음 지시가 됨', r4.messages.some((x) => x.role === 'user' && /반려: 색을 파랑으로/.test(x.text)) && r4.messages.some((x) => x.review === 'rejected'), 'no reject');
+      tgPush({ message: { chat: { id: 777, type: 'private' }, text: '/방' } });
+      await wait(() => TG.sent.some((x) => /어느 방/.test(x.text)));
+      const list = TG.sent.filter((x) => /어느 방/.test(x.text)).pop();
+      const other = list && list.reply_markup.inline_keyboard.map((x) => x[0]).find((x) => /다른방/.test(x.text));
+      tgPush({ callback_query: { id: 'q3', data: other && other.callback_data, message: { chat: { id: 777 } } } });
+      await wait(() => TG.answers.some((x) => x.callback_query_id === 'q3'));
+      tgPush({ message: { chat: { id: 777, type: 'private' }, text: '여기는 다른방' } });
+      await wait(() => false); const rr = await idle(rid2);
+      check('텔레그램: /방으로 방 바꾸기', rr.messages.some((x) => x.role === 'user' && x.text === '여기는 다른방'), JSON.stringify(rr.messages.map((x) => x.text).slice(-2)));
+      const off = (await api('/api/telegram', { method: 'POST', body: JSON.stringify({ disconnect: true }) })).body;
+      check('텔레그램: 연결 끊기', !off.connected && !off.paired, JSON.stringify(off)); }
+    // 26. 방 템플릿
+    { const t = (await api('/api/templates')).body;
+      const d = W('tpl'); const rid = (await api('/api/rooms', { method: 'POST', body: JSON.stringify({ title: '', cwd: d, templateId: 'compare' }) })).body.id;
+      const r = await room(rid);
+      check('템플릿으로 방 만들기 (패널 + 방 메모)', t.length >= 4 && JSON.stringify(r.members) === JSON.stringify(['marcus', 'hunter', 'sage', 'ledger']) && /공정하게 비교/.test(r.memo || ''), JSON.stringify([t.length, r.members, r.memo]));
+      const t2 = (await api('/api/templates', { method: 'POST', body: JSON.stringify({ name: '주간 회의', kickoff: '이번 주: ()', mode: 'blind', fromRoom: rid }) })).body;
+      const mine = t2.find((x) => x.name === '주간 회의');
+      const rid2 = (await api('/api/rooms', { method: 'POST', body: JSON.stringify({ title: 'x', cwd: d, templateId: mine.id }) })).body.id;
+      const r2 = await room(rid2);
+      const t3 = (await api('/api/templates', { method: 'POST', body: JSON.stringify({ remove: mine.id }) })).body;
+      check('지금 방을 템플릿으로 저장·사용·삭제', mine.mode === 'blind' && JSON.stringify(r2.members) === JSON.stringify(r.members) && /공정하게/.test(r2.memo) && !t3.some((x) => x.id === mine.id), JSON.stringify([mine, r2.members])); }
   } catch (e) { check('테스트 실행', false, e.stack); }
+  tgSrv.close(); tgSrv.closeAllConnections && tgSrv.closeAllConnections();
   srv.kill('SIGTERM'); await sleep(500);
   const fail = results.filter((r) => !r[1]).length;
   console.log(`\n${results.length - fail}/${results.length} 통과`);

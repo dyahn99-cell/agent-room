@@ -540,6 +540,7 @@ function renderShell(){
       <button class="sidebtn" id="sbStats">📊 AI 성적표</button>
       <button class="sidebtn" id="sbPersonas">👥 전문가·패널</button>
       <button class="sidebtn" id="sbActivity">🧾 작업 기록</button>
+      <button class="sidebtn" id="sbTelegram">📱 텔레그램</button>
       <button class="sidebtn" id="sbRestart">🔄 서버 재시작</button>
     </div>
     <h6>대화방</h6>
@@ -563,6 +564,7 @@ function renderShell(){
   $('#sbStats').onclick = () => { closeSide(); openStats(); };
   $('#sbPersonas').onclick = () => { closeSide(); openPersonas(); };
   $('#sbActivity').onclick = () => { closeSide(); openActivity(); };
+  $('#sbTelegram').onclick = () => { closeSide(); openTelegram(); };
   $('#sbRestart').onclick = () => { closeSide(); restartServer(); };
   $('#theme').onclick = toggleTheme;
   $('#verBtn').onclick = openUpdate;
@@ -606,7 +608,7 @@ function renderTop(){
 }
 
 // ---------- 전문가·패널 ----------
-const ENG_LABEL = { claude:'클로드', codex:'코덱스', opencode:'오픈코드' };
+const ENG_LABEL = { claude:'클로드', codex:'코덱스', opencode:'오픈코드', acp:'ACP (다른 에이전트)' };
 const PALETTE = ['#C96442','#1A9E7A','#6E5BD6','#B45309','#0E7490','#4D7C0F','#7C3AED','#DB2777','#2563EB','#57534E'];
 function openInvite(){
   const r = curRoom(); if (!r) return;
@@ -687,10 +689,11 @@ async function editPersona(id, back){
           <div class="field"><label>모델</label><select id="pModel">${cat.models.map(x=>`<option value="${esc(x.id)}" ${x.id===d.model?'selected':''}>${esc(x.name)}</option>`).join('')}${!known&&d.model?`<option value="${esc(d.model)}" selected>${esc(d.model)}</option>`:''}<option value="__custom">직접 입력…</option></select></div>
           <div class="field"><label>추론 강도</label><select id="pEff"><option value="">기본</option>${(cat.efforts||[]).map(e=>`<option ${e===d.effort?'selected':''}>${e}</option>`).join('')}</select></div>
         </div>
+        ${d.engine==='acp' ? `<div class="field"><label>실행 명령 (ACP를 지원하는 에이전트)</label><input id="pAcp" value="${esc(d.acpCommand||'')}" placeholder="예: gemini --experimental-acp"><div style="font-size:12.5px;color:var(--text3);margin-top:4px">우분투에 설치된 에이전트를 명령어로 불러요. 예: <code>gemini --experimental-acp</code>, <code>opencode acp</code>. 처음엔 우분투에서 한 번 직접 실행해 로그인해 두세요.</div></div>` : ''}
         <p style="font-size:12.5px;color:var(--text3);margin:4px 0 0">오픈코드 엔진은 모델만 바꾸면 다른 회사 AI가 돼요. 목록에 없는 모델은 우분투에서 <code>opencode auth login</code>으로 키를 등록하면 나타나요.</p>
       </div>
       <footer>${id && !a.builtin ? '<button class="btn danger" id="pDel" style="margin-right:auto">삭제</button>' : ''}<button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">저장</button></footer>`);
-    const keep = () => { d.name=$('#pName').value; d.emoji=$('#pEmoji').value; d.description=$('#pDesc').value; d.systemPrompt=$('#pPrompt').value; d.effort=$('#pEff').value; };
+    const keep = () => { d.name=$('#pName').value; d.emoji=$('#pEmoji').value; d.description=$('#pDesc').value; d.systemPrompt=$('#pPrompt').value; d.effort=$('#pEff').value; if ($('#pAcp')) d.acpCommand=$('#pAcp').value; };
     $('#mClose').onclick = $('#mCancel').onclick = () => back ? back() : closeOverlays();
     if (id) knowBox(id, $('#kBox'));
     $('#modal').querySelectorAll('[data-c]').forEach(b => b.onclick = () => { keep(); d.color = b.dataset.c; draw(); });
@@ -863,12 +866,68 @@ function openMemo(){
 }
 
 // ---------- 토론 모드 ----------
+function openCompare(bid){
+  const ms = S.messages.filter(m => m.role==='agent' && m.blind && m.blind.bid===bid);
+  const q = S.messages.find(m => m.role==='user' && m.blind && m.blind.bid===bid);
+  const ans = ms.filter(m => !m.blind.final), fin = ms.find(m => m.blind.final);
+  const col = (m) => `<div style="flex:1 1 260px;min-width:240px;border:1px solid rgba(0,0,0,.1);border-radius:12px;padding:12px;overflow:auto;max-height:60vh"><div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">${avatar(m.agent)}<b style="color:${agent(m.agent).color}">${esc(agent(m.agent).name)}</b>${m.status==='running'?'<small style="color:var(--text3)">쓰는 중…</small>':''}</div><div class="md" style="font-size:14px">${md(m.text||'')}</div></div>`;
+  showModal(`<header><h2>🙈 블라인드 비교</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
+    <div class="mbody">${q?`<div style="font-size:13.5px;color:var(--text2);margin-bottom:10px;white-space:pre-wrap">${esc(q.text)}</div>`:''}
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:stretch">${ans.length ? ans.map(col).join('') : '<div style="color:var(--text3)">아직 답이 없어요.</div>'}</div>
+      ${fin?`<div style="margin-top:12px;border-radius:12px;padding:12px;background:var(--raised)"><b>비교 정리 · ${esc(agent(fin.agent).name)}</b><div class="md" style="font-size:14px;margin-top:6px">${md(fin.text||'')}</div></div>`:''}</div>
+    <footer><button class="btn primary" id="mCancel">닫기</button></footer>`);
+  $('#modal').style.width = 'min(1100px, calc(100vw - 32px))';
+  $('#mClose').onclick = $('#mCancel').onclick = closeOverlays;
+}
+async function saveTemplate(){
+  const r = curRoom(); if (!r) return toast('방을 먼저 열어주세요');
+  showModal(`<header><h2>템플릿으로 저장</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
+    <div class="mbody"><p style="margin:0 0 6px;color:var(--text2);font-size:13.5px">지금 방의 멤버와 방 메모를 묶어서, 다음에 "새 방"에서 한 번에 꺼내 써요.</p>
+      <div style="display:flex;gap:8px"><div class="field" style="flex:1"><label>이름</label><input id="tpName" value="${esc(r.title)}"></div><div class="field" style="width:90px"><label>이모지</label><input id="tpEmoji" placeholder="📁" maxlength="4"></div></div>
+      <div class="field"><label>한 줄 설명</label><input id="tpDesc" placeholder="예: 주간 영업 회의 준비"></div>
+      <div class="field"><label>시작 방식</label><select id="tpMode"><option value="normal">그냥 대화</option><option value="debate">토론</option><option value="blind">블라인드</option></select></div>
+      <div class="field"><label>시작 문구 (새 방 입력창에 미리 채워져요)</label><textarea class="reason" id="tpKick" style="min-height:90px" placeholder="예: 이번 주 주제: (여기에)\n\n@마커스 먼저 정리해줘"></textarea></div></div>
+    <footer><button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">저장</button></footer>`);
+  $('#mClose').onclick = $('#mCancel').onclick = closeOverlays;
+  $('#mOk').onclick = async () => { try { S.templates = await api('/api/templates', { method:'POST', body:JSON.stringify({ name:$('#tpName').value, emoji:$('#tpEmoji').value, description:$('#tpDesc').value, mode:$('#tpMode').value, kickoff:$('#tpKick').value, fromRoom:r.id }) }); toast('템플릿으로 저장했어요'); closeOverlays(); } catch(e){ toast(e.message); } };
+}
+async function openTelegram(){
+  let t; try { t = await api('/api/telegram'); } catch(e){ return toast(e.message); }
+  const draw = () => {
+    const rooms = S.rooms || [];
+    const body = !t.connected ? `
+      <ol style="margin:0 0 12px;padding-left:20px;color:var(--text2);font-size:14px;line-height:1.7"><li>텔레그램에서 <b>@BotFather</b>를 찾아 <code>/newbot</code>을 보내요.</li><li>봇 이름과 아이디를 정하면 <b>토큰</b>(숫자:글자)을 줘요.</li><li>그 토큰을 아래에 붙여넣어요.</li></ol>
+      <div class="field"><label>봇 토큰</label><input id="tgTok" type="password" placeholder="123456789:AA…" autocomplete="off"></div>
+      <p style="font-size:12.5px;color:var(--text3);margin:4px 0 0">토큰은 이 태블릿 안에만 저장돼요. 깃허브나 다른 곳으로 나가지 않아요.</p>`
+    : !t.paired ? `
+      <p style="margin:0 0 10px;font-size:14px">봇 <b>@${esc(t.bot||'')}</b>에 연결했어요. 이제 내 폰이 주인이라는 걸 확인할게요.</p>
+      <p style="margin:0 0 6px;color:var(--text2);font-size:14px">텔레그램에서 <b>@${esc(t.bot||'')}</b>를 열고 아래 코드를 보내주세요.</p>
+      <div style="font-size:34px;font-weight:800;letter-spacing:6px;text-align:center;padding:14px;border-radius:12px;background:var(--raised)">${esc(t.code||'')}</div>
+      <p style="font-size:12.5px;color:var(--text3);margin:8px 0 0">이 코드를 보낸 사람만 방에 말할 수 있어요. 다른 사람이 봇을 찾아도 무시해요.</p>`
+    : `
+      <p style="margin:0 0 10px;font-size:14px">✅ <b>@${esc(t.bot||'')}</b>와 연결돼 있어요. 폰에서 글을 보내면 아래 방으로 들어가요.</p>
+      <div class="field"><label>연결된 방</label><select id="tgRoom">${rooms.map(r=>`<option value="${r.id}" ${r.id===t.roomId?'selected':''}>${esc(r.title)}</option>`).join('')}</select></div>
+      <label class="chk"><input type="checkbox" id="tgAll" ${t.all?'checked':''}><span>다른 방의 답도 폰으로 받기</span></label>
+      <p style="font-size:12.5px;color:var(--text3);margin:8px 0 0">폰에서 <code>/방</code>으로 방을 바꾸고, <code>/상태</code> <code>/중지</code>도 쓸 수 있어요. 파일이 바뀐 작업은 승인·반려·되돌리기 버튼이 같이 와요.</p>`;
+    showModal(`<header><h2>📱 텔레그램</h2><button class="iconbtn" id="mClose">${I.x}</button></header><div class="mbody">${body}${t.error?`<p style="color:var(--err);font-size:13px;margin:8px 0 0">${esc(t.error)}</p>`:''}</div>
+      <footer>${t.connected?'<button class="btn danger" id="tgOff" style="margin-right:auto">연결 끊기</button>':''}${t.paired?'<button class="btn" id="tgTest">테스트 보내기</button>':''}<button class="btn${t.connected?' primary':''}" id="mCancel">닫기</button>${!t.connected?'<button class="btn primary" id="mOk">연결</button>':''}</footer>`);
+    const post = async (b) => { try { t = await api('/api/telegram', { method:'POST', body:JSON.stringify(b) }); return true; } catch(e){ toast(e.message); return false; } };
+    $('#mClose').onclick = $('#mCancel').onclick = () => { openTelegram._open = false; closeOverlays(); };
+    if ($('#mOk')) $('#mOk').onclick = async () => { if (await post({ token:$('#tgTok').value })) draw(); };
+    if ($('#tgOff')) $('#tgOff').onclick = async () => { if (!confirm2('tgOff')) return; if (await post({ disconnect:true })) draw(); };
+    if ($('#tgTest')) $('#tgTest').onclick = async () => { if (await post({ test:true })) toast('보냈어요. 폰을 확인해 보세요'); };
+    if ($('#tgRoom')) $('#tgRoom').onchange = (e) => post({ roomId:e.target.value });
+    if ($('#tgAll')) $('#tgAll').onchange = (e) => post({ all:e.target.checked });
+  };
+  openTelegram._open = true; openTelegram._refresh = async () => { if (!openTelegram._open) return; try { t = await api('/api/telegram'); draw(); } catch {} };
+  draw();
+}
 S.debate = null;
 function openDebate(){
   const r = curRoom(); if (!r) return;
   const on = onAgents(); const d = S.debate || { participants: on.map(a=>a.id), rounds: 2, summarizer: on.find(a=>roomAgent(a.id).role==='lead')?.id || on[0]?.id || '' };
   showModal(`<header><h2>토론 모드</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
-    <div class="mbody"><p style="margin:0 0 6px;color:var(--text2);font-size:13.5px">다음에 보내는 메시지로 토론을 시작해요. 앱이 순서대로 돌리고, 마지막에 정리 담당이 결론을 내요.</p>
+    <div class="mbody"><div class="field"><label>방식</label><div style="display:flex;gap:8px"><label class="chk" style="flex:1"><input type="radio" name="dbMode" value="debate" ${d.blind?'':'checked'}><span><b>💬 토론</b><br><small style="color:var(--text3)">앞사람 말을 보고 이어서 반박·보충</small></span></label><label class="chk" style="flex:1"><input type="radio" name="dbMode" value="blind" ${d.blind?'checked':''}><span><b>🙈 블라인드</b><br><small style="color:var(--text3)">서로 안 보고 각자 답한 뒤 나란히 비교</small></span></label></div></div>
       <div class="field"><label>참가자 (순서대로 말해요)</label>${on.map(a=>`<label class="chk"><input type="checkbox" value="${a.id}" ${d.participants.includes(a.id)?'checked':''}>${avatar(a.id)}${esc(a.name)}</label>`).join('')}</div>
       <div class="field"><label>라운드</label><select id="dbRounds">${[1,2,3,4].map(n=>`<option value="${n}" ${d.rounds===n?'selected':''}>${n}라운드</option>`).join('')}</select></div>
       <div class="field"><label>정리 담당</label><select id="dbSum"><option value="">없음</option>${on.map(a=>`<option value="${a.id}" ${d.summarizer===a.id?'selected':''}>${esc(a.name)}</option>`).join('')}</select></div></div>
@@ -878,7 +937,7 @@ function openDebate(){
   $('#mOk').onclick = () => {
     const parts = [...$('#modal').querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value);
     if (parts.length < 2) return toast('2명 이상 골라주세요');
-    S.debate = { participants: parts, rounds: +$('#dbRounds').value, summarizer: $('#dbSum').value || null };
+    S.debate = { participants: parts, rounds: +$('#dbRounds').value, summarizer: $('#dbSum').value || null, blind: $('#modal').querySelector('input[name=dbMode]:checked').value === 'blind' };
     closeOverlays(); renderComposer(); $('#inp')?.focus();
   };
 }
@@ -926,7 +985,7 @@ function memberCard(r, a){
     h && h.ok === false ? `<span class="pill" style="color:var(--err)">${esc(h.text)}</span>` : '',
     h && h.sandbox === false ? `<span class="pill">${ra.noSandbox ? '샌드박스 없이 · 스냅샷 보호' : '샌드박스 안 됨 · 실행 막힘'}</span>` : ''].join('');
   const noBars = !(u.windows||[]).length ? `<div class="ubar"><div class="l"><span>${a.engine==='opencode' ? '오픈코드 모델 · 한도는 제공사 기준' : '한도 정보는 첫 답변 뒤에 보여요'}</span></div></div>` : '';
-  const engName = { claude:'클로드', codex:'코덱스', opencode:'오픈코드' }[a.engine] || a.engine;
+  const engName = { claude:'클로드', codex:'코덱스', opencode:'오픈코드', acp:'ACP' }[a.engine] || a.engine;
   return `<div class="mem ${sc==='s-work'?'work':''} ${ra.enabled?'':'off'}" data-mem="${a.id}">
     <div class="mh">${avatar(a.id)}<div style="min-width:0"><b>${esc(a.name)}</b><div class="sub">${a.builtin?'':esc(engName)+' · '}${esc(mname)}${ra.effort?' · '+esc(ra.effort):''}</div></div><span class="state ${sc}">${st}</span></div>
     ${a.description ? `<div style="font-size:12.5px;color:var(--text2);margin-top:6px">${esc(a.description)}</div>` : ''}
@@ -1016,7 +1075,7 @@ function stepIcon(k){ return I[k] || I.tool; }
 function renderMsg(m){
   if (m.role === 'user'){
     const atts = (m.attachments||[]).length ? `<div class="atts">${m.attachments.map(a=>`<div class="att">${I.file}<span>${esc(a.name)}</span></div>`).join('')}</div>` : '';
-    return `<div class="msg user" id="m-${m.id}">${atts}${m.debate?`<div class="dbtag" style="margin-bottom:5px">토론 시작 · ${m.debate.participants.map(id=>esc(agent(id).name)).join('→')} ×${m.debate.rounds}${m.debate.summarizer?' · 정리 '+esc(agent(m.debate.summarizer).name):''}</div>`:''}<div class="bubble">${esc(m.text)}</div></div>`;
+    return `<div class="msg user" id="m-${m.id}">${atts}${m.via==='telegram'?'<div class="dbtag" style="margin-bottom:5px;background:#E0F2FE;color:#075985">📱 텔레그램</div>':''}${m.blind?`<div class="dbtag" style="margin-bottom:5px;cursor:pointer" data-blind="${m.blind.bid}">🙈 블라인드 · ${m.blind.participants.map(id=>esc(agent(id).name)).join(', ')} · 나란히 보기</div>`:''}${m.debate?`<div class="dbtag" style="margin-bottom:5px">토론 시작 · ${m.debate.participants.map(id=>esc(agent(id).name)).join('→')} ×${m.debate.rounds}${m.debate.summarizer?' · 정리 '+esc(agent(m.debate.summarizer).name):''}</div>`:''}<div class="bubble">${esc(m.text)}</div></div>`;
   }
   if (m.role === 'manager') return `<div class="msg agent manager" id="m-${m.id}"><div class="who"><div class="av mgr-av">✦</div><span class="n">관리자</span><span class="tag" style="background:var(--raised);color:var(--text2)">Claude</span><span class="time">${fmtTime(m.ts)}</span></div><div class="body"><div class="mgrbox md">${md(m.text)}</div></div></div>`;
   if (m.role === 'system') return `<div class="msg system" id="m-${m.id}"><div>${esc(m.text)}${m.undoCheckpoint?` <button class="linkbtn" data-undo="${m.id}">되돌리기 취소</button>`:''}</div></div>`;
@@ -1058,7 +1117,7 @@ function renderMsg(m){
     tail += `<div class="st-stop">스냅샷을 못 만들어서 이 작업은 되돌리기가 안 돼요</div>`;
   }
   return `<div class="msg agent" id="m-${m.id}">
-    <div class="who">${avatar(m.agent)}<span class="n" style="color:${a.color}">${esc(a.name)}</span>${m.writer?'<span class="tag">작성</span>':''}${ROLE_NAME[roomAgent(m.agent).role]&&running?`<span class="role">${ROLE_NAME[roomAgent(m.agent).role]}</span>`:''}<span class="time">${fmtTime(m.ts)}</span>${m.debate?`<span class="dbtag">${m.debate.final?'정리':'토론 '+m.debate.round+'/'+m.debate.total}</span>`:''}${running?`<span class="elapsed" data-start="${m.startedAt||m.ts}" data-last="${m.lastOutAt||''}" data-act="${esc(m.activity||'')}"></span>`:''}</div>
+    <div class="who">${avatar(m.agent)}<span class="n" style="color:${a.color}">${esc(a.name)}</span>${m.writer?'<span class="tag">작성</span>':''}${m.blind?`<span class="dbtag" style="cursor:pointer" data-blind="${m.blind.bid}">${m.blind.final?'비교 정리':'🙈 블라인드'}</span>`:''}${ROLE_NAME[roomAgent(m.agent).role]&&running?`<span class="role">${ROLE_NAME[roomAgent(m.agent).role]}</span>`:''}<span class="time">${fmtTime(m.ts)}</span>${m.debate?`<span class="dbtag">${m.debate.final?'정리':'토론 '+m.debate.round+'/'+m.debate.total}</span>`:''}${running?`<span class="elapsed" data-start="${m.startedAt||m.ts}" data-last="${m.lastOutAt||''}" data-act="${esc(m.activity||'')}"></span>`:''}</div>
     <div class="body">${stepsHtml}${body}${tail}${!running && m.status!=='error' && m.text ? `<div class="acts"><button data-copymsg="${m.id}">${I.copy} 복사</button><button data-ideamsg="${m.id}">💡 보관</button></div>` : ''}</div></div>`;
 }
 
@@ -1073,6 +1132,7 @@ function bindMsg(el){
   el.querySelectorAll('[data-revert]').forEach(b => b.onclick = () => confirmRevert(b.dataset.revert));
   el.querySelectorAll('[data-ideamsg]').forEach(b => b.onclick = () => { const m=S.messages.find(x=>x.id===b.dataset.ideamsg); if (m) saveIdea(m.text.replace(/\s+/g,' ').slice(0,300), m.id); });
   el.querySelectorAll('[data-memopen]').forEach(b => b.onclick = () => openPanel('memory'));
+  el.querySelectorAll('[data-blind]').forEach(b => b.onclick = () => openCompare(b.dataset.blind));
   el.querySelectorAll('[data-cite]').forEach(b => b.onclick = () => viewKnow(b.dataset.citeby, b.dataset.cite));
   el.querySelectorAll('[data-undo]').forEach(b => b.onclick = () => { const m=S.messages.find(x=>x.id===b.dataset.undo); if (m) api(`/api/rooms/${S.current}/revert`, { method:'POST', body:JSON.stringify({ checkpoint:m.undoCheckpoint }) }).then(()=>toast('취소했어요')).catch(e=>toast(e.message)); });
   el.querySelectorAll('[data-allownosb]').forEach(b => b.onclick = async () => {
@@ -1235,6 +1295,7 @@ function mentionsIn(text){
 }
 function updateTarget(){
   const el = $('#target'), r = curRoom(); if (!el || !r) return;
+  if (S.debate && S.debate.blind){ const d = S.debate; el.innerHTML = `<span>🙈 블라인드: <b>${d.participants.map(id=>esc(agent(id).name)).join(', ')}</b>가 서로 안 보고 답해요${d.summarizer?` · 비교 정리 <b>${esc(agent(d.summarizer).name)}</b>`:''}</span>`; return; }
   if (S.debate){ const d = S.debate; el.innerHTML = `<span>💬 토론: <b>${d.participants.map(id=>esc(agent(id).name)).join(' → ')}</b> × ${d.rounds}라운드${d.summarizer?` · 정리 <b>${esc(agent(d.summarizer).name)}</b>`:''}</span>`; return; }
   const text = $('#inp')?.value || ''; const ms = mentionsIn(text); const on = onAgents().map(a=>a.id);
   let who = ms.includes('all') ? on : ms.filter(x => on.includes(x));
@@ -1260,6 +1321,9 @@ function insertMention(key){
 }
 const COMMANDS = [
   { c:'/토론', d:'토론 모드 설정', run:()=>openDebate() },
+  { c:'/블라인드', d:'서로 안 보고 답한 뒤 나란히 비교', run:()=>{ const on = onAgents().map(a=>a.id); S.debate = { ...(S.debate||{ participants:on, rounds:1, summarizer:on[0]||null }), blind:true }; openDebate(); } },
+  { c:'/텔레그램', d:'폰 텔레그램과 연결', run:()=>openTelegram() },
+  { c:'/템플릿저장', d:'지금 방 구성을 템플릿으로 저장', run:()=>saveTemplate() },
   { c:'/메모', d:'방 메모 고정·수정', run:()=>openMemo() },
   { c:'/기억', d:'방 기억 보기', run:()=>openPanel('memory') },
   { c:'/아이디어', d:'뒤에 쓴 내용을 보관함에 넣기', arg:true, run:(t)=> t ? saveIdea(t) : openPanel('ideas') },
@@ -1402,6 +1466,7 @@ function openNewRoom(){
   let picked = S.home;
   showModal(`<header><h2>새 방</h2><button class="iconbtn" id="mClose">${I.x}</button></header>
     <div class="mbody">
+      <div class="field"><label>템플릿 (자주 하는 일)</label><div id="nTpl" style="display:flex;gap:6px;flex-wrap:wrap"><span style="font-size:13px;color:var(--text3)">불러오는 중…</span></div><div id="nTplDesc" style="font-size:12.5px;color:var(--text3);margin-top:6px"></div></div>
       <div class="field"><label>방 이름</label><input id="nTitle" placeholder="예: AMS 대시보드 개선"></div>
       <div class="field"><label>패널 (들어올 멤버)</label><select id="nTeam">${(S.teams||[]).map(t=>`<option value="${t.id}" ${t.id==='basic'?'selected':''}>${esc(t.name)} — ${t.personaIds.map(id=>esc(agent(id).name)).join(', ')}</option>`).join('')}</select></div>
       <div class="field"><label>작업 폴더</label>${fsPicker(S.home, p => picked = p)}</div>
@@ -1409,10 +1474,24 @@ function openNewRoom(){
     <footer><button class="btn" id="mCancel">취소</button><button class="btn primary" id="mOk">만들기</button></footer>`);
   $('#mClose').onclick = $('#mCancel').onclick = closeOverlays;
   setTimeout(()=>$('#nTitle').focus(), 50);
+  let tpl = null;
+  const drawTpl = () => { const box = $('#nTpl'); if (!box) return;
+    box.innerHTML = '<button class="btn sm '+(tpl?'':'primary')+'" data-tp="">빈 방</button>' + (S.templates||[]).map(t=>`<button class="btn sm ${tpl&&tpl.id===t.id?'primary':''}" data-tp="${t.id}">${esc(t.emoji||'📁')} ${esc(t.name)}</button>`).join('');
+    $('#nTplDesc').innerHTML = tpl ? esc(tpl.description||'') + (tpl.mode==='debate'?' · 토론으로 시작':tpl.mode==='blind'?' · 블라인드로 시작':'') + (tpl.preset?'':' · <a href="#" id="tplDel" style="color:var(--err)">이 템플릿 지우기</a>') : '';
+    if ($('#tplDel')) $('#tplDel').onclick = async (e) => { e.preventDefault(); S.templates = await api('/api/templates', { method:'POST', body:JSON.stringify({ remove:tpl.id }) }); tpl = null; drawTpl(); };
+    box.querySelectorAll('[data-tp]').forEach(b => b.onclick = () => { tpl = (S.templates||[]).find(t=>t.id===b.dataset.tp) || null; if (tpl && tpl.teamId && $('#nTeam')) $('#nTeam').value = tpl.teamId; if (tpl && !$('#nTitle').value) $('#nTitle').placeholder = tpl.name; drawTpl(); });
+  };
+  api('/api/templates').then(t => { S.templates = t; drawTpl(); }).catch(()=>{});
   $('#mOk').onclick = async () => {
     try {
-      const r = await api('/api/rooms', { method:'POST', body:JSON.stringify({ title:$('#nTitle').value, cwd:picked, teamId:$('#nTeam') ? $('#nTeam').value : undefined }) });
-      upsertRoom(r); closeOverlays(); openRoom(r.id);
+      const r = await api('/api/rooms', { method:'POST', body:JSON.stringify({ title:$('#nTitle').value || (tpl ? tpl.name : ''), cwd:picked, teamId:$('#nTeam') ? $('#nTeam').value : undefined, templateId: tpl ? tpl.id : undefined }) });
+      upsertRoom(r); closeOverlays(); await openRoom(r.id);
+      if (tpl){ const members = onAgents().map(a=>a.id);
+        if (tpl.mode==='debate' && members.length>=2) S.debate = { participants:members, rounds:2, summarizer:members[0] };
+        if (tpl.mode==='blind' && members.length>=2) S.debate = { participants:members, rounds:1, summarizer:members[0], blind:true };
+        renderComposer(); const inp = $('#inp'); if (inp && tpl.kickoff){ inp.value = tpl.kickoff; inp.dispatchEvent(new Event('input')); inp.focus(); }
+        toast('시작 문구를 채워뒀어요. 괄호 부분만 고쳐서 보내세요'); }
+      return;
     } catch(e){ toast(e.message); }
   };
 }
@@ -1683,6 +1762,8 @@ function connect(){
       const before = sig(S.rooms.find(x=>x.id===ev.room.id));
       upsertRoom(ev.room); renderSide();
       if (ev.room.id === S.current){ renderTop(); renderMemo(); if (before !== sig(ev.room)) renderComposer(); else { updateBusy(); updateTarget(); } renderPanel(); }
+    } else if (ev.type === 'telegram'){
+      if (openTelegram._refresh) openTelegram._refresh(); toast('텔레그램과 연결됐어요');
     } else if (ev.type === 'personas'){
       reloadAgents().catch(()=>{});
     } else if (ev.type === 'briefing'){

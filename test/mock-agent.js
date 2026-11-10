@@ -8,6 +8,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
 
 async function main() {
+  if (kind === 'acpagent') return acpMain();
   // 상태 점검용 하위 명령은 바로 응답
   const sub = args[0];
   if (sub === 'auth') { out({ loggedIn: true }); return; }
@@ -85,5 +86,32 @@ async function main() {
     out({ type: 'text', sessionID: sid, part: { type: 'text', text: reply } });
     out({ type: 'step_finish', sessionID: sid, part: { type: 'step-finish' } });
   }
+}
+async function acpMain() {
+  // ACP(Agent Client Protocol) 흉내: stdin으로 JSON-RPC를 받고 stdout으로 답함
+  const rl = require('readline').createInterface({ input: process.stdin });
+  const waiters = {}; let nextId = 100;
+  const ask = (method, params) => new Promise((res) => { const id = nextId++; waiters[id] = res; out({ jsonrpc: '2.0', id, method, params }); });
+  const note = (update) => out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'acp-1', update } });
+  console.log('some startup banner that is not json');
+  rl.on('line', async (line) => {
+    let m; try { m = JSON.parse(line); } catch { return; }
+    if (m.id != null && !m.method) { if (waiters[m.id]) waiters[m.id](m.result); return; }
+    if (m.method === 'initialize') return out({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: false } } });
+    if (m.method === 'session/new') return out({ jsonrpc: '2.0', id: m.id, result: { sessionId: 'acp-1' } });
+    if (m.method === 'session/prompt') {
+      const prompt = m.params.prompt.map((p) => p.text).join('');
+      if (process.env.MOCK_LOG) fs.appendFileSync(process.env.MOCK_LOG, `\n===== acp args=${JSON.stringify(args)}\n${prompt}\n`);
+      note({ sessionUpdate: 'tool_call', toolCallId: 'c1', title: 'Read README.md', kind: 'read', status: 'in_progress' });
+      note({ sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'completed' });
+      const perm = await ask('session/request_permission', { sessionId: 'acp-1', toolCall: { toolCallId: 'c2', title: 'Write notes.txt', kind: 'edit' }, options: [{ optionId: 'yes', name: 'Allow', kind: 'allow_once' }, { optionId: 'no', name: 'Reject', kind: 'reject_once' }] });
+      const ok = perm && perm.outcome && perm.outcome.optionId === 'yes';
+      if (ok) fs.writeFileSync('notes.txt', 'acp wrote\n');
+      note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ACP 에이전트입니다. ' } });
+      await sleep(100);
+      note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: ok ? '파일을 썼어요.' : '쓰기는 거절당했어요.' } });
+      out({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } });
+    }
+  });
 }
 main();
