@@ -16,7 +16,7 @@ const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
 const KNOW = path.join(DATA, 'knowledge');
-const VERSION = '0.11.3';
+const VERSION = '0.11.4';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS, KNOW]) fs.mkdirSync(d, { recursive: true });
 
@@ -1282,6 +1282,12 @@ async function runAgent(room, job, cur) {
   if (cur.stopped) {
     msg.status = 'stopped';
     if (!msg.text) msg.text = '(중지됨)';
+  } else if (st.session && !job._retriedFresh && /No conversation found|session.*not found/i.test((errorText || '') + '\n' + stderr)) {
+    // 저장된 대화 기록이 이 컴퓨터에 없을 때(실패한 첫 실행이 남긴 번호 등): 새로 시작하고 방 대화를 다시 넘겨서 자동 재시도
+    st.session = null; saveRoom(room); job._retriedFresh = true;
+    msg.status = 'done'; msg.text = '(이전 대화 기록이 없어 새로 시작해요)';
+    pushMessage(room, msg, true);
+    return runAgent(room, job, cur);
   } else if (errorText || (code !== 0 && !ctx.endedOk)) {
     msg.status = 'error';
     const detail = errorText || clip(stderr.trim().split('\n').slice(-6).join('\n'), 800) || `종료 코드 ${code}`;
