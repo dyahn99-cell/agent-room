@@ -16,7 +16,7 @@ const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
 const KNOW = path.join(DATA, 'knowledge');
-const VERSION = '0.11.1';
+const VERSION = '0.11.2';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS, KNOW]) fs.mkdirSync(d, { recursive: true });
 
@@ -948,12 +948,16 @@ const acpAdapter = {
     }
   },
 };
+// 클로드가 옛 버전이면 --permission-prompts 옵션이 없어서 에러가 나므로, 켤 때 한 번 확인해요
+let CLAUDE_PP = true;
+try { CLAUDE_PP = require('child_process').execFileSync('claude', ['--help'], { encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'ignore'] }).includes('--permission-prompts'); } catch { }
 const adapters = {
   acp: acpAdapter,
   claude: {
     build(room, prompt, st, writer, mid) {
       const c = ac(room, mid);
-      const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-prompts', 'none'];
+      const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
+      if (CLAUDE_PP) args.push('--permission-prompts', 'none');
       if (writer) args.push('--permission-mode', 'acceptEdits', '--allowedTools', 'Bash Read Edit Write Glob Grep WebSearch WebFetch TodoWrite');
       else args.push('--permission-mode', 'dontAsk', '--allowedTools', 'Read Glob Grep WebSearch WebFetch' + (c.role === 'checker' ? ' Bash' : ''));
       if (st.session) args.push('--resume', st.session);
