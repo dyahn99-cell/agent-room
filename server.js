@@ -16,7 +16,7 @@ const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
 const KNOW = path.join(DATA, 'knowledge');
-const VERSION = '0.11.0';
+const VERSION = '0.11.1';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS, KNOW]) fs.mkdirSync(d, { recursive: true });
 
@@ -1584,6 +1584,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   let p = url.pathname;
   try {
+    if (p === '/api/ping') return send(res, 200, { ok: true, v: VERSION }); // 연결 확인용 (비밀 정보 없음)
     if (!p.startsWith('/api/') && !p.startsWith('/view/')) {
       let f = p === '/' ? '/index.html' : p;
       const fp = path.normalize(path.join(APP_DIR, 'public', f));

@@ -371,6 +371,9 @@ const newRoom = async (title, cwd, teamId) => (await api('/api/rooms', { method:
       check('텔레그램: /방으로 방 바꾸기', rr.messages.some((x) => x.role === 'user' && x.text === '여기는 다른방'), JSON.stringify(rr.messages.map((x) => x.text).slice(-2)));
       const off = (await api('/api/telegram', { method: 'POST', body: JSON.stringify({ disconnect: true }) })).body;
       check('텔레그램: 연결 끊기', !off.connected && !off.paired, JSON.stringify(off)); }
+    // 27. 연결 확인(ping): 토큰 없이도 응답, 비밀 정보는 없음
+    { const r = await fetch(B + '/api/ping'); const j = await r.json();
+      check('연결 확인 ping', r.status === 200 && j.ok === true && /^\d+\.\d+\.\d+$/.test(j.v) && Object.keys(j).length === 2, JSON.stringify(j)); }
     // 26. 방 템플릿
     { const t = (await api('/api/templates')).body;
       const d = W('tpl'); const rid = (await api('/api/rooms', { method: 'POST', body: JSON.stringify({ title: '', cwd: d, templateId: 'compare' }) })).body.id;
