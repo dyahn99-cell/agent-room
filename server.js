@@ -16,7 +16,7 @@ const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
 const KNOW = path.join(DATA, 'knowledge');
-const VERSION = '0.11.2';
+const VERSION = '0.11.3';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS, KNOW]) fs.mkdirSync(d, { recursive: true });
 
@@ -1287,6 +1287,7 @@ async function runAgent(room, job, cur) {
     const detail = errorText || clip(stderr.trim().split('\n').slice(-6).join('\n'), 800) || `종료 코드 ${code}`;
     msg.errorHint = friendlyError(agentId, detail + '\n' + stderr) || null;
     msg.errorDetail = clip(detail, 1500);
+    console.error(`[실패] ${agentId} 종료코드 ${code}\n${clip(detail + '\n' + stderr, 1500)}`);
     msg.text = (msg.text ? msg.text + '\n\n' : '') + '⚠️ ' + (msg.errorHint || clip(detail, 400));
   } else {
     msg.status = 'done';
