@@ -1,6 +1,6 @@
 #!/bin/bash
 # 더블클릭하면 Agent Room을 켜고 크롬(기본 브라우저)에서 열어요. 이 창을 닫으면 서버도 꺼져요.
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 APP="$HOME/agent-room"
 cd "$APP" || { echo "~/agent-room 폴더가 없어요."; read -r; exit 1; }
 URLF="$HOME/.agent-room/url.txt"
