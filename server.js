@@ -16,7 +16,7 @@ const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
 const KNOW = path.join(DATA, 'knowledge');
-const VERSION = '0.12.0';
+const VERSION = '0.12.1';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS, KNOW]) fs.mkdirSync(d, { recursive: true });
 
@@ -30,6 +30,8 @@ function loadConfig() {
   return out;
 }
 const config = loadConfig();
+// 홈의 .local/bin(안티그래비티 agy 등 설치 위치)도 찾게 해요
+process.env.PATH = `${path.join(os.homedir(), '.local', 'bin')}:${process.env.PATH || ''}`;
 const PORT = Number(process.env.AGENT_ROOM_PORT || config.port || 8777);
 // 엔진 = 실제로 실행되는 프로그램(클로드·코덱스·오픈코드), 멤버 = 엔진 위에 이름·성격을 입힌 전문가
 const ENGINES = Object.keys(config.agents);

@@ -6,7 +6,7 @@ set -e
 REPO="${AGENT_ROOM_REPO:-github.com/dyahn99-cell/agent-room}"
 if [ -n "$AGENT_ROOM_TOKEN" ]; then URL="https://x-access-token:${AGENT_ROOM_TOKEN}@${REPO}.git"; else URL="https://${REPO}.git"; fi
 # proot-distro는 Termux 경로를 PATH 뒤에 붙여서 Termux용 node가 잡힐 수 있어요. 우분투 경로만 쓰게 고정.
-UPATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+UPATH="/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 mkdir -p "$HOME/.codex" "$HOME/.agent-room-share"
 
 echo "▶ 1/4 Termux 패키지"

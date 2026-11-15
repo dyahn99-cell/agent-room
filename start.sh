@@ -3,7 +3,7 @@
 SHARE="$HOME/.agent-room-share"
 URLFILE="$SHARE/url.txt"
 PORT=8777
-UPATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+UPATH="/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 mkdir -p "$SHARE"
 
 # 앱 업데이트로 start.sh/stop.sh가 바뀌었으면 스스로 갈아끼우고 다시 실행
