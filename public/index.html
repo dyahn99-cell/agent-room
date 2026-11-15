@@ -610,7 +610,7 @@ function renderTop(){
 }
 
 // ---------- 전문가·패널 ----------
-const ENG_LABEL = { claude:'클로드', codex:'코덱스', opencode:'오픈코드', acp:'ACP (다른 에이전트)' };
+const ENG_LABEL = { claude:'클로드', codex:'코덱스', opencode:'오픈코드', antigravity:'안티그래비티', acp:'ACP (다른 에이전트)' };
 const PALETTE = ['#C96442','#1A9E7A','#6E5BD6','#B45309','#0E7490','#4D7C0F','#7C3AED','#DB2777','#2563EB','#57534E'];
 function openInvite(){
   const r = curRoom(); if (!r) return;
@@ -987,7 +987,7 @@ function memberCard(r, a){
     h && h.ok === false ? `<span class="pill" style="color:var(--err)">${esc(h.text)}</span>` : '',
     h && h.sandbox === false ? `<span class="pill">${ra.noSandbox ? '샌드박스 없이 · 스냅샷 보호' : '샌드박스 안 됨 · 실행 막힘'}</span>` : ''].join('');
   const noBars = !(u.windows||[]).length ? `<div class="ubar"><div class="l"><span>${a.engine==='opencode' ? '오픈코드 모델 · 한도는 제공사 기준' : '한도 정보는 첫 답변 뒤에 보여요'}</span></div></div>` : '';
-  const engName = { claude:'클로드', codex:'코덱스', opencode:'오픈코드', acp:'ACP' }[a.engine] || a.engine;
+  const engName = { claude:'클로드', codex:'코덱스', opencode:'오픈코드', antigravity:'안티그래비티', acp:'ACP' }[a.engine] || a.engine;
   return `<div class="mem ${sc==='s-work'?'work':''} ${ra.enabled?'':'off'}" data-mem="${a.id}">
     <div class="mh">${avatar(a.id)}<div style="min-width:0"><b>${esc(a.name)}</b><div class="sub">${a.builtin?'':esc(engName)+' · '}${esc(mname)}${ra.effort?' · '+esc(ra.effort):''}</div></div><span class="state ${sc}">${st}</span></div>
     ${a.description ? `<div style="font-size:12.5px;color:var(--text2);margin-top:6px">${esc(a.description)}</div>` : ''}
@@ -1283,7 +1283,7 @@ function completeMention(key){
   const p = q.start + key.length + 2; t.setSelectionRange(p,p); t.focus();
   $('#mentions').classList.remove('show'); autosize(); updateSend();
 }
-const ENGINE_ALIAS = { claude:['claude','클로'], codex:['codex','gpt','지피티'], opencode:['opencode','oc'] };
+const ENGINE_ALIAS = { claude:['claude','클로'], codex:['codex','gpt','지피티'], opencode:['opencode','oc'], antigravity:['antigravity','agy','안티그래비티','안티'] };
 function aliasPairs(){
   const out = [];
   for (const a of S.agents){ out.push([a.id, a.name]); for (const x of ENGINE_ALIAS[a.id]||[]) out.push([a.id, x]); }

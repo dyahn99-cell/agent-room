@@ -9,6 +9,7 @@ const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
 
 async function main() {
   if (kind === 'acpagent') return acpMain();
+  if (kind === 'agy') return agyMain();
   // 상태 점검용 하위 명령은 바로 응답
   const sub = args[0];
   if (sub === 'auth') { out({ loggedIn: true }); return; }
@@ -86,6 +87,21 @@ async function main() {
     out({ type: 'text', sessionID: sid, part: { type: 'text', text: reply } });
     out({ type: 'step_finish', sessionID: sid, part: { type: 'step-finish' } });
   }
+}
+async function agyMain() {
+  // 안티그래비티(agy) 흉내: stdin 으로 NDJSON 한 줄을 받고, delta 조각들과 마지막 result 이벤트를 stdout 으로 내보냄
+  if (args.includes('--version')) { console.log('agy 0.0-mock'); return; }
+  const input = fs.readFileSync(0, 'utf8');
+  let prompt = ''; try { prompt = JSON.parse(input.split('\n')[0]).message.content.map((c) => c.text).join(''); } catch { }
+  const writer = args.includes('accept-edits');
+  if (process.env.MOCK_LOG) fs.appendFileSync(process.env.MOCK_LOG, `\n===== agy writer=${writer} args=${JSON.stringify(args)} gkey=${JSON.stringify(process.env.GEMINI_API_KEY)}\n${prompt}\n`);
+  const lastUser = (prompt.match(/\[(사용자|클로드|코덱스|오픈코드|안티그래비티)\][^\n]*/g) || []).pop() || '';
+  if (/실패/.test(lastUser)) { out({ event: 'result', result: { status: 'ERROR', error: 'quota exceeded 429' } }); return; }
+  if (writer && /써줘/.test(lastUser)) fs.writeFileSync('hello-agy.txt', 'hello from agy\n');
+  out({ event: 'delta', text: '안티그래비티입니다. ' });
+  await sleep(100);
+  out({ event: 'delta', text: '확인했어요.' });
+  out({ event: 'result', result: { status: 'SUCCESS', response: `안티그래비티입니다. "${lastUser.slice(0, 40)}" 확인했어요.${writer ? ' 파일을 수정했어요.' : ' 읽기만 했어요.'}` } });
 }
 async function acpMain() {
   // ACP(Agent Client Protocol) 흉내: stdin으로 JSON-RPC를 받고 stdout으로 답함

@@ -16,7 +16,7 @@ const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
 const KNOW = path.join(DATA, 'knowledge');
-const VERSION = '0.11.4';
+const VERSION = '0.12.0';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS, KNOW]) fs.mkdirSync(d, { recursive: true });
 
@@ -34,7 +34,7 @@ const PORT = Number(process.env.AGENT_ROOM_PORT || config.port || 8777);
 // 엔진 = 실제로 실행되는 프로그램(클로드·코덱스·오픈코드), 멤버 = 엔진 위에 이름·성격을 입힌 전문가
 const ENGINES = Object.keys(config.agents);
 const AGENT_IDS = ENGINES;
-const ENGINE_ALIASES = { claude: ['claude', '클로'], codex: ['codex', 'gpt', '지피티'], opencode: ['opencode', 'oc'] };
+const ENGINE_ALIASES = { claude: ['claude', '클로'], codex: ['codex', 'gpt', '지피티'], opencode: ['opencode', 'oc'], antigravity: ['antigravity', 'agy', '안티그래비티', '안티'] };
 const ALL_ALIASES = ['전체', 'all', '모두', 'everyone'];
 const PERSONA_FILE = path.join(DATA, 'personas.json');
 const TEAM_FILE = path.join(DATA, 'teams.json');
@@ -62,7 +62,7 @@ function savePersonas() { fs.writeFileSync(PERSONA_FILE, JSON.stringify(personas
 function P(id) { return personas.find((p) => p.id === id) || { id, name: id, color: '#888', engine: null }; }
 const eng = (id) => P(id).engine;
 const isMemberId = (id) => !!P(id).engine;
-function roomMembers(r) { const m = Array.isArray(r.members) && r.members.length ? r.members : ENGINES; return m.filter(isMemberId); }
+function roomMembers(r) { const m = Array.isArray(r.members) && r.members.length ? r.members : ENGINES.filter((e) => !config.agents[e].optional); return m.filter(isMemberId); }
 function aliasList() {
   const out = [];
   for (const p of personas) { out.push([p.id, p.name]); out.push([p.id, p.id]); for (const a of ENGINE_ALIASES[p.id] || []) out.push([p.id, a]); }
@@ -115,6 +115,7 @@ async function loadModels() {
     claude: { models: [{ id: '', name: '기본' }, { id: 'fable', name: 'Fable' }, { id: 'opus', name: 'Opus' }, { id: 'sonnet', name: 'Sonnet' }, { id: 'haiku', name: 'Haiku' }], efforts: CLAUDE_EFFORTS },
     codex: { models: [{ id: '', name: '기본' }], efforts: ['low', 'medium', 'high', 'xhigh'] },
     opencode: { models: [{ id: '', name: '기본' }], efforts: ['minimal', 'low', 'medium', 'high', 'max'] },
+    antigravity: { models: [{ id: '', name: '기본' }], efforts: [] },
   };
   if (availability.codex) {
     const r = await run(config.agents.codex.command, ['debug', 'models'], { timeout: 30000 });
@@ -649,7 +650,7 @@ const enabledAgents = (room) => roomMembers(room).filter((a) => ac(room, a).enab
 function friendlyError(agentId, text) {
   const t = String(text || '');
   const n0 = P(agentId).name; const n = n0;
-  const login = { claude: 'claude', codex: 'codex login', opencode: 'opencode auth login' }[eng(agentId)];
+  const login = { claude: 'claude', codex: 'codex login', opencode: 'opencode auth login', antigravity: 'agy' }[eng(agentId)];
   if (/401|unauthori[sz]ed|not logged in|login required|invalid api key|authentication|please run .*login|OAuth/i.test(t)) return `${n} 로그인이 필요해요. 우분투에서 \`${login}\` 실행 후 다시 시도해 주세요.`;
   if (/429|rate.?limit|usage limit|quota|too many requests/i.test(t)) return `${n} 사용량 한도에 걸렸어요. 잠시 뒤 다시 시도하거나 모델을 바꿔보세요.`;
   if (/ENOTFOUND|ECONNRESET|ETIMEDOUT|network|getaddrinfo|socket hang up|fetch failed|tunnel/i.test(t)) return `${n} 네트워크 연결에 실패했어요. 인터넷 연결을 확인해 주세요.`;
@@ -1070,6 +1071,25 @@ const adapters = {
       } else if (ev.type === 'error') {
         const e = ev.error || {};
         ctx.error((e.data && e.data.message) || e.message || e.name || '실패했어요');
+      }
+    },
+  },
+  antigravity: {
+    // 구글 안티그래비티 공식 CLI(agy). 지시문은 표준입력으로 JSON 한 줄로 보내고, 답은 delta 이벤트(조각)와 마지막 result 이벤트로 받아요.
+    build(room, prompt, st, writer, mid) {
+      const args = ['--input-format', 'stream-json', '--output-format', 'stream-json'];
+      if (writer) args.push('--mode', 'accept-edits');
+      args.push('--sandbox');
+      const stdin = JSON.stringify({ event: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt.text }] } }) + '\n';
+      // 종량제 키가 섞여 요금이 나가지 않게, 구독 로그인만 쓰도록 키 환경변수는 비워요
+      return { args, stdin, env: { GEMINI_API_KEY: '', GOOGLE_API_KEY: '' } };
+    },
+    handle(ev, ctx) {
+      if (ev.event === 'delta' && ev.text) return ctx.live(String(ev.text));
+      if (ev.event === 'result' && ev.result && typeof ev.result === 'object') {
+        const r = ev.result;
+        if (r.status === 'SUCCESS') return ctx.final(String(r.response || ''));
+        return ctx.error(String(r.error || r.status || '실패했어요'));
       }
     },
   },

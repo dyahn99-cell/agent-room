@@ -19,6 +19,13 @@
       "command": "opencode",
       "model": "opencode/big-pickle",
       "color": "#6E5BD6"
+    },
+    "antigravity": {
+      "name": "안티그래비티",
+      "command": "agy",
+      "model": "",
+      "optional": true,
+      "color": "#4285F4"
     }
   },
   "defaultAgent": "claude",

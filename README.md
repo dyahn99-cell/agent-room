@@ -58,3 +58,11 @@ AGENT_ROOM_TOKEN=깃허브토큰 bash install.sh     # 비공개 저장소
 ## 문제가 생기면
 
 `cat ~/agent-room.log` 내용을 보내주세요.
+
+## 안티그래비티 (구글 공식 CLI `agy`)
+`agy`가 설치돼 있고 로그인돼 있으면 "안티그래비티" 전문가를 방에 초대할 수 있어요 (기본 멤버는 아니고, 멤버 추가에서 골라요).
+- 지시문을 표준입력으로 보내고 `--input-format/--output-format stream-json` 으로 답을 받아요. 작성 권한이 있을 때만 `--mode accept-edits`, 그 외엔 `--sandbox`만 써요.
+- `GEMINI_API_KEY`, `GOOGLE_API_KEY`는 비워서 실행해요 (구독 로그인만 쓰고 종량제 요금이 나가지 않게).
+- 모델 선택은 아직 없어요. 대화 이어가기도 없어서 매번 방 대화를 같이 넘겨요.
+- 방식은 오픈소스 [ai-dev-director](https://github.com/digilogd-cmd/ai-dev-director)(MIT)가 쓰는 호출 방식을 참고했어요.
+- 실제 `agy`와 연결한 검증은 아직이에요 (가짜 CLI로만 테스트).

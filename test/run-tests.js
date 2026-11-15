@@ -5,10 +5,10 @@ const fs = require('fs'), path = require('path'), os = require('os');
 const ROOT = path.resolve(__dirname, '..');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'ar-test-'));
 const BIN = path.join(TMP, 'bin'); fs.mkdirSync(BIN);
-for (const k of ['claude', 'codex', 'opencode', 'acpagent']) fs.symlinkSync(path.join(__dirname, 'mock-agent.js'), path.join(BIN, k));
+for (const k of ['claude', 'codex', 'opencode', 'acpagent', 'agy']) fs.symlinkSync(path.join(__dirname, 'mock-agent.js'), path.join(BIN, k));
 fs.chmodSync(path.join(__dirname, 'mock-agent.js'), 0o755);
 const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.default.json')));
-for (const k in cfg.agents) cfg.agents[k].command = path.join(BIN, k);
+for (const k in cfg.agents) cfg.agents[k].command = path.join(BIN, k === 'antigravity' ? 'agy' : k);
 cfg.agents.codex.sandbox = 'off'; cfg.port = 8791; cfg.notify = false;
 fs.writeFileSync(path.join(TMP, 'config.json'), JSON.stringify(cfg));
 const DATA = path.join(TMP, 'data'), LOG = path.join(TMP, 'mock.log');
@@ -371,6 +371,24 @@ const newRoom = async (title, cwd, teamId) => (await api('/api/rooms', { method:
       check('텔레그램: /방으로 방 바꾸기', rr.messages.some((x) => x.role === 'user' && x.text === '여기는 다른방'), JSON.stringify(rr.messages.map((x) => x.text).slice(-2)));
       const off = (await api('/api/telegram', { method: 'POST', body: JSON.stringify({ disconnect: true }) })).body;
       check('텔레그램: 연결 끊기', !off.connected && !off.paired, JSON.stringify(off)); }
+    // 28. 안티그래비티(agy) 엔진
+    { const d = W('agy'); const rid = await newRoom('안티', d);
+      const st = (await api('/api/state')).body; const ag = st.agents.find((a) => a.id === 'antigravity');
+      const r0 = await room(rid);
+      check('안티그래비티: 기본 전문가로 있지만 새 방 기본 멤버는 아님', ag && ag.engine === 'antigravity' && ag.available && !r0.members.includes('antigravity') && JSON.stringify(r0.members) === JSON.stringify(['claude', 'codex', 'opencode']), JSON.stringify([ag, r0.members]));
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ members: ['claude', 'antigravity'] }) });
+      fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@안티그래비티 안녕' }) });
+      const r = await idle(rid); const m = r.messages.filter((x) => x.role === 'agent').pop();
+      const lg = fs.readFileSync(LOG, 'utf8');
+      check('안티그래비티가 답함 (읽기 전용 · 구독 키 비움)', m.agent === 'antigravity' && m.status === 'done' && /안티그래비티입니다/.test(m.text) && /writer=false/.test(lg) && lg.includes('"--sandbox"') && !lg.includes('accept-edits') && lg.includes('gkey=""'), JSON.stringify([m.status, m.text, lg.slice(0, 300)]));
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ writer: 'antigravity' }) });
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@안티그래비티 써줘' }) });
+      const r2 = await idle(rid); const m2 = r2.messages.filter((x) => x.role === 'agent').pop();
+      check('안티그래비티: 작성 권한이면 accept-edits + 변경 기록', fs.existsSync(path.join(d, 'hello-agy.txt')) && (m2.changes || []).some((f) => f.path === 'hello-agy.txt') && /accept-edits/.test(fs.readFileSync(LOG, 'utf8')), JSON.stringify([m2.status, m2.changes]));
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@안티그래비티 실패해봐' }) });
+      const r3 = await idle(rid); const m3 = r3.messages.filter((x) => x.role === 'agent').pop();
+      check('안티그래비티: 실패 결과를 안내로 바꿈', m3.status === 'error' && /사용량 한도/.test(m3.errorHint || ''), JSON.stringify([m3.status, m3.errorHint, m3.errorDetail])); }
     // 27. 연결 확인(ping): 토큰 없이도 응답, 비밀 정보는 없음
     { const r = await fetch(B + '/api/ping'); const j = await r.json();
       check('연결 확인 ping', r.status === 200 && j.ok === true && /^\d+\.\d+\.\d+$/.test(j.v) && Object.keys(j).length === 2, JSON.stringify(j)); }
