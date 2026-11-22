@@ -91,6 +91,7 @@ async function main() {
 async function agyMain() {
   // 안티그래비티(agy) 흉내: stdin 으로 NDJSON 한 줄을 받고, delta 조각들과 마지막 result 이벤트를 stdout 으로 내보냄
   if (args.includes('--version')) { console.log('agy 0.0-mock'); return; }
+  if (args[0] === 'models') { console.log('Available models:\ngemini-3.1-pro-high  Gemini 3.1 Pro (High)\ngemini-3.8-flash-medium  Gemini 3.8 Flash (Medium)\nclaude-opus-5-5'); return; }
   const input = fs.readFileSync(0, 'utf8');
   let prompt = ''; try { prompt = JSON.parse(input.split('\n')[0]).message.content.map((c) => c.text).join(''); } catch { }
   const writer = args.includes('accept-edits');

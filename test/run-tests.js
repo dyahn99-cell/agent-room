@@ -388,6 +388,15 @@ const newRoom = async (title, cwd, teamId) => (await api('/api/rooms', { method:
       const r = await idle(rid); const m = r.messages.filter((x) => x.role === 'agent').pop();
       const lg = fs.readFileSync(LOG, 'utf8');
       check('안티그래비티가 답함 (읽기 전용 · 구독 키 비움)', m.agent === 'antigravity' && m.status === 'done' && /안티그래비티입니다/.test(m.text) && /writer=false/.test(lg) && lg.includes('"--sandbox"') && !lg.includes('accept-edits') && lg.includes('gkey=""'), JSON.stringify([m.status, m.text, lg.slice(0, 300)]));
+      const mods = (await api('/api/models')).body;
+      const am = (mods.antigravity || {}).models || [];
+      check('안티그래비티 모델 목록 (agy models)', am.length === 4 && am[1].id === 'gemini-3.1-pro-high' && /Gemini 3.1 Pro \(High\)/.test(am[1].name) && am[3].id === 'claude-opus-5-5', JSON.stringify(am));
+      check('모델 이름에 버전이 보임 (클로드·코덱스)', (mods.claude.models.find((x) => x.id === 'claude-opus-5-5') || {}).name === 'Opus 5.5' && mods.claude.models.some((x) => /최신 자동/.test(x.name)), JSON.stringify(mods.claude.models.map((x) => x.name)));
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ agents: { antigravity: { model: 'gemini-3.1-pro-high' } } }) });
+      fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@안티그래비티 모델확인' }) }); await idle(rid);
+      check('안티그래비티: 고른 모델을 --model 로 전달', fs.readFileSync(LOG, 'utf8').includes('"--model","gemini-3.1-pro-high"'), fs.readFileSync(LOG, 'utf8').slice(0, 200));
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ agents: { antigravity: { model: '' } } }) });
       await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ writer: 'antigravity' }) });
       await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@안티그래비티 써줘' }) });
       const r2 = await idle(rid); const m2 = r2.messages.filter((x) => x.role === 'agent').pop();

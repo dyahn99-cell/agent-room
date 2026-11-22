@@ -16,7 +16,7 @@ const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
 const KNOW = path.join(DATA, 'knowledge');
-const VERSION = '0.12.2';
+const VERSION = '0.12.3';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS, KNOW]) fs.mkdirSync(d, { recursive: true });
 
@@ -112,9 +112,24 @@ async function checkAgents() {
 // ---------- 모델 목록 / 상태 점검 ----------
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 let modelCache = null;
+// agy models 출력에서 "모델 id (+ 설명)" 줄만 뽑아요. 표 모양·글머리 기호·제목 줄이 섞여 있어도 견디게 느슨하게 읽어요
+function parseAgyModels(text) {
+  const out = [], seen = new Set();
+  for (let line of String(text || '').replace(/\x1b\[[0-9;]*m/g, '').split('\n')) {
+    line = line.replace(/^[\s│|•*>\-]+/, '').replace(/[│|]\s*$/, '').trim();
+    if (!line || /^(available|models?|name|id|─|=|-{2,})/i.test(line) || /:$/.test(line)) continue;
+    const parts = line.split(/\s{2,}|\s*[│|]\s*|\t/).map((x) => x.trim()).filter(Boolean);
+    const id = parts[0];
+    if (!/^[A-Za-z0-9][\w.:\/-]{2,80}$/.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, name: parts[1] && parts[1] !== id ? `${parts[1]} (${id})` : id });
+  }
+  return out.slice(0, 60);
+}
 async function loadModels() {
   const out = {
-    claude: { models: [{ id: '', name: '기본' }, { id: 'fable', name: 'Fable' }, { id: 'opus', name: 'Opus' }, { id: 'sonnet', name: 'Sonnet' }, { id: 'haiku', name: 'Haiku' }], efforts: CLAUDE_EFFORTS },
+    // 클로드는 목록을 물어볼 방법이 없어서 고정 목록이에요. 버전이 적힌 이름은 그 버전에 고정, 아래 "최신 자동"은 그 계열의 최신을 써요
+    claude: { models: [{ id: '', name: '기본' }, { id: 'claude-fable-5-2', name: 'Fable 5.2' }, { id: 'claude-opus-5-5', name: 'Opus 5.5' }, { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5' }, { id: 'claude-haiku-5-5', name: 'Haiku 5.5' }, { id: 'fable', name: 'Fable · 최신 자동' }, { id: 'opus', name: 'Opus · 최신 자동' }, { id: 'sonnet', name: 'Sonnet · 최신 자동' }, { id: 'haiku', name: 'Haiku · 최신 자동' }], efforts: CLAUDE_EFFORTS },
     codex: { models: [{ id: '', name: '기본' }], efforts: ['low', 'medium', 'high', 'xhigh'] },
     opencode: { models: [{ id: '', name: '기본' }], efforts: ['minimal', 'low', 'medium', 'high', 'max'] },
     antigravity: { models: [{ id: '', name: '기본' }], efforts: [] },
@@ -126,7 +141,7 @@ async function loadModels() {
       for (const m of arr) if (m.visibility !== 'hide') {
         const levels = (m.supported_reasoning_levels || []).map((e) => e.effort || e);
         levels.forEach((e) => eff.add(e));
-        out.codex.models.push({ id: m.slug, name: m.display_name || m.slug, efforts: levels });
+        out.codex.models.push({ id: m.slug, name: m.display_name && m.display_name !== m.slug ? `${m.display_name} (${m.slug})` : m.slug, efforts: levels });
       }
       if (eff.size) out.codex.efforts = [...eff];
     } catch { }
@@ -136,6 +151,11 @@ async function loadModels() {
     const ids = r.stdout.split('\n').map((l) => l.trim()).filter((l) => /^[\w.-]+\/[\w.:/-]+$/.test(l));
     const free = ids.filter((i) => /free|big-pickle/.test(i)), rest = ids.filter((i) => !free.includes(i));
     for (const i of [...free, ...rest].slice(0, 120)) out.opencode.models.push({ id: i, name: i.replace(/^opencode\//, '') + (free.includes(i) ? ' · 무료' : '') });
+  }
+  if (availability.antigravity) {
+    // agy models: 로그인된 계정으로 쓸 수 있는 모델 목록 (추론 강도는 모델 이름에 포함: 예 gemini-3.1-pro-high)
+    const r = await run(config.agents.antigravity.command, ['models'], { timeout: 40000 });
+    for (const m of parseAgyModels(r.stdout)) out.antigravity.models.push(m);
   }
   modelCache = { at: now(), data: out };
   return out;
@@ -1083,6 +1103,7 @@ const adapters = {
       const args = ['--input-format', 'stream-json', '--output-format', 'stream-json'];
       if (writer) args.push('--mode', 'accept-edits');
       args.push('--sandbox');
+      if (ac(room, mid).model) args.push('--model', ac(room, mid).model);
       const stdin = JSON.stringify({ event: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt.text }] } }) + '\n';
       // 종량제 키가 섞여 요금이 나가지 않게, 구독 로그인만 쓰도록 키 환경변수는 비워요
       return { args, stdin, env: { GEMINI_API_KEY: '', GOOGLE_API_KEY: '' } };
