@@ -16,7 +16,7 @@ const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
 const KNOW = path.join(DATA, 'knowledge');
-const VERSION = '0.12.3';
+const VERSION = '0.12.4';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS, KNOW]) fs.mkdirSync(d, { recursive: true });
 
@@ -1494,8 +1494,26 @@ const PRESET_TEMPLATES = [
   { id: 'proposal', emoji: '📄', name: '제안서 작성', description: '고객 상황 → 해결안 → 숫자 → 문서', teamId: 'panel4', mode: 'normal', memo: '목표: 고객 맞춤 제안서를 만든다.\n순서: ① 고객 상황·문제 정리 ② 해결안과 제품 구성 ③ 비용·절감 효과 계산 ④ 문서 작성.\n숫자에는 가정과 출처를 적는다.', kickoff: '고객사: (이름·업종)\n현재 상황: (알고 있는 것)\n제안할 것: (제품·범위)\n\n@마커스 먼저 이 고객에게 통할 제안의 뼈대를 잡아줘.' },
   { id: 'compare', emoji: '⚖️', name: '경쟁사 비교', description: '서로 안 보고 답한 뒤 비교', teamId: 'panel4', mode: 'blind', memo: '목표: 우리 제품과 경쟁 제품을 공정하게 비교한다.\n확인 안 된 내용은 추측이라고 밝힌다. 약점도 숨기지 않는다.', kickoff: '비교 대상: (우리 제품) vs (경쟁 제품)\n\n기능, 가격, 설치·유지, 통신 호환성 관점에서 어디가 더 나은지 각자 판단해줘.' },
   { id: 'research', emoji: '🔎', name: '고객사 사전조사', description: '방문 전 빠른 조사와 질문 준비', teamId: 'panel4', mode: 'normal', memo: '목표: 고객 방문 전에 알아야 할 것과 물어볼 것을 정리한다.\n결과: 회사 개요, 예상 공정·설비, 기회 포인트, 현장에서 물어볼 질문 10개.', kickoff: '방문할 고객사: (이름·지역)\n만날 사람: (부서·직급)\n\n@헌터 이 회사에 대해 찾을 수 있는 것부터 정리해줘.' },
+  { id: 'selfup', emoji: '🛠', name: '앱 스스로 업그레이드', description: '계획 커밋 → 수정 커밋 → 후기 (방 폴더를 앱 폴더로)', teamId: 'basic', mode: 'normal',
+    memo: ['목표: Agent Room 앱 자체를 조금씩 개선한다. 사용자는 코드를 못 읽으니 설명은 항상 쉬운 말로 한다.',
+      '',
+      '항상 이 순서로 한다.',
+      '① 계획 커밋: 먼저 docs/upgrades/날짜-제목.md 에 "무엇을 / 왜 / 위험 / 되돌리는 법"을 적고 `계획: 제목`으로 커밋한다.',
+      '② 수정 커밋: 반드시 새 브랜치 upgrade/제목 에서만 작업한다 (main 직접 수정 금지). 코드를 고친 뒤 `node test/run-tests.js`가 전부 통과해야 `수정: 제목`으로 커밋한다. 통과 못 하면 커밋하지 말고 이유를 적고 멈춘다.',
+      '③ 후기: 같은 문서에 후기를 덧붙이고 `후기: 제목`으로 커밋한다. 실제로 바뀐 점(쉬운 말), 테스트 결과(통과 수/전체), 남은 위험, 하지 않은 것을 적는다.',
+      '',
+      '금지: git push, main 병합, 쓰고 있는 서버 재시작, 차단 목록·권한 규칙(blockCommands, 권한 설정) 코드 변경. 안전장치를 바꿔야 하면 제안만 쓰고 멈춘다.'].join('\n'),
+    kickoff: '개선할 것: (여기에 한 가지만)\n\n먼저 계획 커밋부터 해줘.' },
 ];
 let templates = []; try { templates = JSON.parse(fs.readFileSync(TPL_FILE, 'utf8')); } catch { templates = PRESET_TEMPLATES.map((t) => ({ ...t, preset: true })); }
+// 새로 추가된 기본 템플릿은 한 번만 넣어줘요 (사용자가 지운 건 다시 살리지 않음)
+{
+  const SEED_FILE = path.join(DATA, 'templates-seeded.json');
+  let seeded; try { seeded = JSON.parse(fs.readFileSync(SEED_FILE, 'utf8')); } catch { seeded = ['seminar', 'proposal', 'compare', 'research']; }
+  let changed = false;
+  for (const t of PRESET_TEMPLATES) if (!seeded.includes(t.id)) { seeded.push(t.id); changed = true; if (!templates.some((x) => x.id === t.id)) templates.push({ ...t, preset: true }); }
+  if (changed || !fs.existsSync(SEED_FILE)) { try { fs.writeFileSync(SEED_FILE, JSON.stringify(seeded)); fs.writeFileSync(TPL_FILE, JSON.stringify(templates, null, 1)); } catch { } }
+}
 const saveTemplates = () => fs.writeFileSync(TPL_FILE, JSON.stringify(templates, null, 1));
 
 const TERMUX_NOTIFY = '/data/data/com.termux/files/usr/bin/termux-notification';
