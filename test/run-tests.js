@@ -413,6 +413,8 @@ const newRoom = async (title, cwd, teamId) => (await api('/api/rooms', { method:
       const r = await room(rid);
       const su = t.find((x) => x.id === 'selfup');
       check('기본 템플릿: 앱 스스로 업그레이드 (계획→수정→후기, push 금지)', su && /계획 커밋/.test(su.memo) && /후기/.test(su.memo) && /git push/.test(su.memo) && su.teamId === 'basic', JSON.stringify(su && su.name));
+      { const l = (await api('/api/selfup')).body; const v = await api('/api/selfup/verify', { method: 'POST', body: JSON.stringify({ name: 'nope' }) }); const ap = await api('/api/selfup/apply', { method: 'POST', body: JSON.stringify({ name: 'nope' }) }); const rb = await api('/api/selfup/rollback', { method: 'POST' });
+        check('스스로 업그레이드: 목록·없는 항목 거절·되돌릴 기록 없음', Array.isArray(l.upgrades) && v.status === 404 && ap.status === 404 && rb.status === 404, JSON.stringify([l, v.status, ap.status, rb.status])); }
       check('템플릿으로 방 만들기 (패널 + 방 메모)', t.length >= 4 && JSON.stringify(r.members) === JSON.stringify(['marcus', 'hunter', 'sage', 'ledger']) && /공정하게 비교/.test(r.memo || ''), JSON.stringify([t.length, r.members, r.memo]));
       const t2 = (await api('/api/templates', { method: 'POST', body: JSON.stringify({ name: '주간 회의', kickoff: '이번 주: ()', mode: 'blind', fromRoom: rid }) })).body;
       const mine = t2.find((x) => x.name === '주간 회의');

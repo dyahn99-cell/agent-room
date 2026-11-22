@@ -482,7 +482,7 @@ async function api(path, opts={}){
   const res = await fetch(path, { ...opts, headers:{ 'x-token':TOKEN, ...(opts.body && !(opts.body instanceof Blob) && !(opts.body instanceof File) ? {'Content-Type':'application/json'} : {}), ...(opts.headers||{}) } });
   if (res.status === 401){ renderLogin(); throw new Error('auth'); }
   const data = await res.json().catch(()=>({}));
-  if (!res.ok) throw new Error(data.error || ('오류 ' + res.status));
+  if (!res.ok){ const er = new Error(data.error || ('오류 ' + res.status)); er.data = data; throw er; }
   return data;
 }
 function toast(t){ const el=$('#toast'); el.textContent=t; el.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(()=>el.classList.remove('show'),2200); }
@@ -1338,6 +1338,7 @@ const COMMANDS = [
   { c:'/새방', d:'새 방 만들기', run:()=>openNewRoom() },
   { c:'/방설정', d:'방 이름·폴더·자동 턴', run:()=>openSettings() },
   { c:'/업데이트', d:'새 버전 확인', run:()=>openUpdate() },
+  { c:'/업그레이드', d:'AI들이 앱을 스스로 고치기 (검증·적용·되돌리기)', run:()=>openSelfup() },
   { c:'/재시작', d:'서버 다시 켜기', run:()=>restartServer() },
   { c:'/관리자', d:'이 방 합의·피드백을 관리자(Claude)에게 보내기', arg:true, run:(t)=>openManager(t) },
   { c:'/관리자확인', d:'관리자 답장 지금 확인', run:()=>api(`/api/rooms/${S.current}/managercheck`,{method:'POST'}).then(()=>toast('확인했어요')).catch(e=>toast(e.message)) },
@@ -1695,9 +1696,10 @@ async function openUpdate(){
   else if (!u.behind) body = `<p style="margin:0;color:var(--text2)">최신 버전이에요 (v${esc(u.version)} · ${esc(u.current)}).</p>`;
   else { ok = true; body = `<p style="margin:0 0 8px;color:var(--text2)">새 변경 ${u.behind}개가 있어요. 받으면 서버가 잠깐 다시 켜져요. 대화방과 설정은 그대로예요.</p><ul style="margin:0;padding-left:18px;font-size:14px">${u.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul>`; }
   $('#modal').innerHTML = `<header><h2>업데이트</h2><button class="iconbtn" id="mClose">${I.x}</button></header><div class="mbody">${body}</div>
-    <footer><button class="btn" id="mRestart" style="margin-right:auto">서버 재시작</button><button class="btn" id="mCancel">닫기</button>${ok?'<button class="btn primary" id="mOk">지금 업데이트</button>':''}</footer>`;
+    <footer><button class="btn" id="mRestart">서버 재시작</button><button class="btn" id="mSelfup" style="margin-right:auto">🛠 스스로 업그레이드</button><button class="btn" id="mCancel">닫기</button>${ok?'<button class="btn primary" id="mOk">지금 업데이트</button>':''}</footer>`;
   $('#mClose').onclick = $('#mCancel').onclick = closeOverlays;
   $('#mRestart').onclick = () => restartServer();
+  $('#mSelfup').onclick = () => openSelfup();
   if (ok) $('#mOk').onclick = async () => {
     $('#mOk').disabled = true; $('#mOk').textContent = '받는 중…';
     try { await api('/api/update', { method:'POST' }); waitRestart(); }
@@ -1720,6 +1722,66 @@ function waitRestart(){
     try { await api('/api/state'); location.reload(); return; } catch {}
     if (Date.now() - t0 < 60000) setTimeout(poll, 1500); else { closeOverlays(); toast('서버가 다시 안 켜졌어요. Termux에서 ~/start.sh'); }
   }, 2500);
+}
+
+
+// ---------- 스스로 업그레이드 ----------
+async function openSelfup(){
+  showModal(`<header><h2>🛠 스스로 업그레이드</h2><button class="iconbtn" id="mClose">${I.x}</button></header><div class="mbody" id="selfupBox" style="min-height:120px"><span class="spin"></span></div>`);
+  $('#mClose').onclick = closeOverlays;
+  await renderSelfup();
+}
+async function renderSelfup(){
+  const box = $('#selfupBox'); if (!box) return;
+  let d; try { d = await api('/api/selfup'); } catch(e){ box.innerHTML = `<p style="color:var(--err)">${esc(e.message)}</p>`; return; }
+  const row = (u) => {
+    const v = u.verify, vying = d.verifying === u.branch;
+    const badge = vying ? '<span style="color:var(--text3)">검증 중… (몇 분 걸려요)</span>'
+      : !v ? '<span style="color:var(--text3)">아직 검증 전</span>'
+      : !v.fresh ? '<span style="color:#b7791f">검증 후 코드가 바뀌었어요 · 다시 검증 필요</span>'
+      : v.ok ? `<span style="color:#2f855a;font-weight:700">🟢 통과 · ${esc(v.summary)}</span>` : `<span style="color:var(--err);font-weight:700">🔴 실패 · ${esc(v.summary)}</span>`;
+    const warn = u.warnings.length ? `<div style="font-size:12px;color:var(--err);margin-top:4px">⚠ 안전장치 관련 코드가 바뀌었어요:<br>${u.warnings.map(w=>esc(w)).join('<br>')}</div>` : '';
+    const canApply = v && v.fresh && v.ok && u.ahead > 0;
+    return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px" data-n="${esc(u.name)}">
+      <div style="font-weight:700">${esc(u.subject||u.name)}</div>
+      <div style="font-size:12px;color:var(--text3)">${esc(u.name)} · 커밋 ${u.ahead}개</div>
+      <div style="font-size:13px;margin-top:4px">${badge}</div>${warn}
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+        ${u.roomId?`<button class="btn" data-a="room" data-r="${u.roomId}">방 열기</button>`:''}
+        <button class="btn" data-a="verify" ${vying||!u.hasDir||u.ahead<1?'disabled':''}>검증</button>
+        <button class="btn primary" data-a="apply" ${canApply?'':'disabled'}>적용하고 재시작</button>
+      </div></div>`;
+  };
+  const last = d.last ? `<div style="margin-top:10px;padding:10px;border-radius:10px;background:var(--bg2,rgba(0,0,0,.04))"><div style="font-size:13px">마지막 적용: ${esc(d.last.branch)} (적용 전 ${esc(d.last.from)})</div><button class="btn" id="suRollback" style="margin-top:6px">⏪ 적용 전으로 되돌리기</button></div>` : '';
+  box.innerHTML = `<p style="margin:0 0 8px;color:var(--text2);font-size:14px">하고 싶은 개선을 한 줄로 쓰면, AI들이 앱의 <b>복사본</b>에서 고쳐요. 지금 쓰는 앱은 안 건드려요. 끝나면 자동 검증 → 초록불이면 적용.</p>
+    <div style="display:flex;gap:6px;margin-bottom:12px"><input id="suTitle" placeholder="예: 방 목록에 검색창 추가" style="flex:1"><button class="btn primary" id="suStart">시작</button></div>
+    ${d.upgrades.length ? d.upgrades.map(row).join('') : '<p style="color:var(--text3);font-size:13px">진행 중인 업그레이드가 없어요.</p>'}${last}`;
+  $('#suStart').onclick = async () => {
+    const title = $('#suTitle').value.trim(); if (!title) return toast('무엇을 고칠지 한 줄 적어주세요');
+    $('#suStart').disabled = true;
+    try {
+      const r = await api('/api/selfup/start', { method:'POST', body:JSON.stringify({ title }) });
+      upsertRoom(r.room); closeOverlays(); await openRoom(r.roomId);
+      const t = $('#inp'); if (t){ t.value = r.kickoff; autosize(); t.focus(); }
+      toast('복사본을 만들었어요. 보내기를 누르면 시작해요');
+    } catch(e){ toast(e.message); $('#suStart').disabled = false; }
+  };
+  box.querySelectorAll('[data-a]').forEach(b => b.onclick = async () => {
+    const n = b.closest('[data-n]')?.dataset.n, a = b.dataset.a;
+    if (a === 'room'){ closeOverlays(); openRoom(b.dataset.r); return; }
+    try {
+      if (a === 'verify'){ await api('/api/selfup/verify', { method:'POST', body:JSON.stringify({ name:n }) }); renderSelfup(); }
+      if (a === 'apply'){
+        let r; try { r = await api('/api/selfup/apply', { method:'POST', body:JSON.stringify({ name:n }) }); }
+        catch(e){ if (e.data && e.data.needConfirm){ if (!confirm('안전장치 관련 코드가 바뀐 업그레이드예요. 그래도 적용할까요?')) return; r = await api('/api/selfup/apply', { method:'POST', body:JSON.stringify({ name:n, confirm:true }) }); } else throw e; }
+        waitRestart();
+      }
+    } catch(e){ toast(e.message); }
+  });
+  const rb = $('#suRollback'); if (rb) rb.onclick = async () => {
+    if (!confirm('마지막 업그레이드를 취소하고 적용 전 상태로 돌아갈까요?')) return;
+    try { await api('/api/selfup/rollback', { method:'POST' }); waitRestart(); } catch(e){ toast(e.message); }
+  };
 }
 
 // ---------- 알림 ----------
@@ -1810,6 +1872,8 @@ function connect(){
       if (document.hidden) showNotify(ev.briefing.kind==='weekly'?'주간 회고':'아침 브리핑', ev.briefing.text.split('\n')[0]);
     } else if (ev.type === 'usage'){
       S.usage = ev.usage; renderPanel();
+    } else if (ev.type === 'selfup'){
+      if ($('#selfupBox')) renderSelfup();
     } else if (ev.type === 'restarting'){
       if (!$('#modal').classList.contains('show')) waitRestart();
     } else if (ev.type === 'idle'){

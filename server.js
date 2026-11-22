@@ -16,7 +16,7 @@ const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
 const KNOW = path.join(DATA, 'knowledge');
-const VERSION = '0.12.5';
+const VERSION = '0.13.0';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS, KNOW]) fs.mkdirSync(d, { recursive: true });
 
@@ -1653,6 +1653,52 @@ function newRoom({ title, cwd, teamId, templateId }) {
   return room;
 }
 
+
+// ---------- 스스로 업그레이드 (앱 안에서: 작업 복사본 → 자동 검증 → 적용 → 되돌리기) ----------
+const SELFUP_DIR = path.join(DATA, 'selfup');
+const SELFUP_STATUS = path.join(SELFUP_DIR, 'status.json');
+const SELFUP_LAST = path.join(SELFUP_DIR, 'last.json');
+let selfupStatus = {}; try { selfupStatus = JSON.parse(fs.readFileSync(SELFUP_STATUS, 'utf8')); } catch { }
+let selfupVerifying = null;
+const saveSelfupStatus = () => { try { fs.mkdirSync(SELFUP_DIR, { recursive: true }); fs.writeFileSync(SELFUP_STATUS, JSON.stringify(selfupStatus)); } catch { } };
+const gitApp = (...a) => run('git', ['-C', APP_DIR, ...a], { timeout: 60000 });
+const SAFETY_RE = /blockCommands|permission-mode|dontAsk|allowedTools|git\s+push|needsCheckpoint|selfup/;
+function selfupMemo(branch, dir) {
+  return ['목표: Agent Room 앱 자체를 조금씩 개선한다. 사용자는 코드를 못 읽으니 설명은 항상 쉬운 말로 한다.',
+    `작업 폴더: ${dir} (브랜치 ${branch}). 이 폴더는 실제 앱의 복사본이라 마음껏 고쳐도 지금 쓰는 앱엔 영향이 없다. 이 폴더 밖은 건드리지 않는다.`,
+    '',
+    '항상 이 순서로 한다.',
+    '① 계획 커밋: docs/upgrades/날짜-제목.md 에 "무엇을 / 왜 / 위험 / 되돌리는 법"을 적고 `계획: 제목`으로 커밋한다.',
+    '② 수정 커밋: 코드를 고친 뒤 `node test/run-tests.js`가 전부 통과해야 `수정: 제목`으로 커밋한다. 통과 못 하면 커밋하지 말고 이유를 적고 멈춘다. 새 기능에는 테스트도 하나 추가한다.',
+    '③ 후기 커밋: 같은 문서에 후기(실제로 바뀐 점을 쉬운 말로, 테스트 결과, 남은 위험, 하지 않은 것)를 덧붙이고 `후기: 제목`으로 커밋한다.',
+    '끝나면 "적용 준비 끝"이라고 알린다. 검증과 적용은 사용자가 앱의 [업그레이드] 화면에서 누른다.',
+    '',
+    '금지: git push, main 브랜치 변경·병합, 이 폴더 밖 수정, 차단 목록·권한 규칙(blockCommands, 권한 설정) 코드 변경. 안전장치를 바꿔야 하면 제안만 쓰고 멈춘다.'].join('\n');
+}
+async function selfupList() {
+  const refs = (await gitApp('for-each-ref', '--format=%(refname:short)', 'refs/heads/upgrade/*')).stdout.split('\n').map((x) => x.trim()).filter(Boolean);
+  const out = [];
+  for (const br of refs) {
+    const sha = (await gitApp('rev-parse', br)).stdout.trim();
+    const ahead = Number((await gitApp('rev-list', '--count', `main..${br}`)).stdout.trim() || 0);
+    const subject = (await gitApp('log', '-1', '--format=%s', br)).stdout.trim();
+    const wt = path.join(SELFUP_DIR, br.replace(/\//g, '-'));
+    const st = selfupStatus[br];
+    const diff = (await gitApp('diff', '-U0', `main...${br}`)).stdout.split('\n').filter((l) => /^[+-][^+-]/.test(l) && SAFETY_RE.test(l)).slice(0, 5).map((l) => clip(l, 120));
+    out.push({ branch: br, name: br.replace(/^upgrade\//, ''), sha: sha.slice(0, 8), ahead, subject, hasDir: fs.existsSync(wt), verify: st ? { ok: st.ok, fresh: st.sha === sha, summary: st.summary, at: st.at } : null, warnings: diff, roomId: [...rooms.values()].find((r) => r.cwd === wt)?.id || null });
+  }
+  let last = null; try { last = JSON.parse(fs.readFileSync(SELFUP_LAST, 'utf8')); } catch { }
+  return { upgrades: out.filter((u) => u.ahead > 0 || u.hasDir), verifying: selfupVerifying, last };
+}
+function selfupBusy() { return [...rooms.values()].some((r) => runtime(r.id).current || runtime(r.id).queue.length); }
+async function ensureMainClean() {
+  const br = (await gitApp('branch', '--show-current')).stdout.trim();
+  const dirty = (await gitApp('status', '--porcelain', '--untracked-files=no')).stdout.trim();
+  if (dirty) return '지금 앱 폴더에 저장 안 된 변경이 있어서 진행할 수 없어요. 먼저 정리가 필요해요.';
+  if (br !== 'main') { const co = await gitApp('checkout', 'main'); if (!co.ok) return 'main으로 돌아가지 못했어요: ' + clip((co.stderr || co.stdout).trim(), 200); }
+  return '';
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   let p = url.pathname;
@@ -1868,6 +1914,77 @@ const server = http.createServer(async (req, res) => {
       send(res, 200, { ok: true, restarting: true });
       broadcast({ type: 'restarting' });
       setTimeout(() => { for (const r of rooms.values()) saveRoom(r, true); process.exit(75); }, 400); // 75 = start.sh가 다시 켜줌
+      return;
+    }
+    if (p === '/api/selfup' && req.method === 'GET') return send(res, 200, await selfupList());
+    if (p === '/api/selfup/start' && req.method === 'POST') {
+      const b = await readJSON(req);
+      const title = clip(String(b.title || '').trim(), 60) || '업그레이드';
+      if (!(await gitApp('rev-parse', '--git-dir')).ok) return send(res, 400, { error: '이 설치는 git 연결이 안 돼 있어요. install.sh를 한 번 다시 돌려주세요.' });
+      const d = new Date(Date.now() + 9 * 3600e3).toISOString().replace(/[-:T]/g, '').slice(0, 12);
+      const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20);
+      const branch = `upgrade/${d}${slug ? '-' + slug : ''}`;
+      const dir = path.join(SELFUP_DIR, branch.replace(/\//g, '-'));
+      fs.mkdirSync(SELFUP_DIR, { recursive: true });
+      const wt = await gitApp('worktree', 'add', '-b', branch, dir, 'main');
+      if (!wt.ok) return send(res, 500, { error: '작업 복사본을 만들지 못했어요: ' + clip((wt.stderr || wt.stdout).trim(), 250) });
+      const hasId = (await run('git', ['-C', dir, 'config', 'user.name'])).stdout.trim();
+      if (!hasId) { await run('git', ['-C', dir, 'config', 'user.name', 'Agent Room']); await run('git', ['-C', dir, 'config', 'user.email', 'agent-room@localhost']); }
+      const room = newRoom({ title: '🛠 ' + title, cwd: dir, templateId: 'selfup' });
+      room.memo = selfupMemo(branch, dir); room.templateName = '앱 스스로 업그레이드';
+      saveRoom(room, true); pushRoom(room);
+      return send(res, 200, { ok: true, branch, roomId: room.id, room: roomSummary(room), kickoff: `개선할 것: ${title}\n\n먼저 계획 커밋부터 해줘.` });
+    }
+    if (p === '/api/selfup/verify' && req.method === 'POST') {
+      const b = await readJSON(req); const br = 'upgrade/' + String(b.name || '').replace(/[^\w.-]/g, '');
+      if (selfupVerifying) return send(res, 409, { error: '지금 다른 검증이 돌고 있어요.' });
+      const dir = path.join(SELFUP_DIR, br.replace(/\//g, '-'));
+      if (!fs.existsSync(dir)) return send(res, 404, { error: '작업 폴더가 없어요.' });
+      const sha = (await gitApp('rev-parse', br)).stdout.trim();
+      const dirty = (await run('git', ['-C', dir, 'status', '--porcelain', '--untracked-files=no'])).stdout.trim();
+      if (dirty) return send(res, 409, { error: '아직 커밋 안 된 변경이 있어요. AI가 커밋을 끝낸 뒤에 검증해주세요.' });
+      selfupVerifying = br; broadcast({ type: 'selfup' });
+      send(res, 200, { ok: true, started: true });
+      run('node', ['test/run-tests.js'], { cwd: dir, timeout: 600000 }).then((r) => {
+        const out = (r.stdout + r.stderr); const m = out.match(/(\d+)\/(\d+) 통과/);
+        const ok = r.ok && !!m && m[1] === m[2];
+        const fails = out.split('\n').filter((l) => l.startsWith('❌')).slice(0, 3).join(' / ');
+        selfupStatus[br] = { sha, ok, at: now(), summary: m ? `${m[1]}/${m[2]} 통과${fails ? ' · ' + clip(fails, 160) : ''}` : clip(out.trim().split('\n').slice(-3).join(' '), 200) || '테스트를 돌리지 못했어요' };
+        saveSelfupStatus(); selfupVerifying = null; broadcast({ type: 'selfup' });
+      });
+      return;
+    }
+    if (p === '/api/selfup/apply' && req.method === 'POST') {
+      const b = await readJSON(req); const br = 'upgrade/' + String(b.name || '').replace(/[^\w.-]/g, '');
+      if (selfupBusy()) return send(res, 409, { error: 'AI가 작업 중이에요. 끝난 뒤에 적용해주세요.' });
+      const rp = await gitApp('rev-parse', '--verify', '-q', br); const sha = rp.ok ? rp.stdout.trim() : ''; const st = selfupStatus[br];
+      if (!sha) return send(res, 404, { error: '그 업그레이드를 못 찾았어요.' });
+      if (!st || st.sha !== sha || !st.ok) return send(res, 409, { error: '검증을 통과한 최신 상태가 아니에요. 먼저 [검증]을 눌러 초록불을 받아야 해요.' });
+      const warn = (await selfupList()).upgrades.find((u) => u.branch === br)?.warnings || [];
+      if (warn.length && !b.confirm) return send(res, 409, { error: '안전장치 관련 코드가 바뀌었어요. 내용을 확인하고 다시 눌러주세요.', needConfirm: true, warnings: warn });
+      const bad = await ensureMainClean(); if (bad) return send(res, 409, { error: bad });
+      const tag = 'pre-upgrade-' + Date.now();
+      const before = (await gitApp('rev-parse', 'HEAD')).stdout.trim();
+      await gitApp('tag', tag);
+      const mg = await gitApp('merge', '--ff-only', br);
+      if (!mg.ok) return send(res, 409, { error: 'main이 그 사이에 바뀌어서 그대로 합칠 수 없어요. 업데이트를 받은 뒤 새로 시작해주세요.' });
+      try { fs.writeFileSync(SELFUP_LAST, JSON.stringify({ tag, branch: br, from: before.slice(0, 8), at: now() })); } catch { }
+      await gitApp('worktree', 'remove', '--force', path.join(SELFUP_DIR, br.replace(/\//g, '-')));
+      send(res, 200, { ok: true, restarting: true });
+      broadcast({ type: 'restarting' });
+      setTimeout(() => { for (const r of rooms.values()) saveRoom(r, true); process.exit(75); }, 400);
+      return;
+    }
+    if (p === '/api/selfup/rollback' && req.method === 'POST') {
+      if (selfupBusy()) return send(res, 409, { error: 'AI가 작업 중이에요. 끝난 뒤에 되돌려주세요.' });
+      let last; try { last = JSON.parse(fs.readFileSync(SELFUP_LAST, 'utf8')); } catch { return send(res, 404, { error: '되돌릴 기록이 없어요.' }); }
+      const bad = await ensureMainClean(); if (bad) return send(res, 409, { error: bad });
+      const rs = await gitApp('reset', '--hard', last.tag);
+      if (!rs.ok) return send(res, 500, { error: '되돌리지 못했어요: ' + clip((rs.stderr || rs.stdout).trim(), 200) });
+      try { fs.unlinkSync(SELFUP_LAST); } catch { }
+      send(res, 200, { ok: true, restarting: true });
+      broadcast({ type: 'restarting' });
+      setTimeout(() => { for (const r of rooms.values()) saveRoom(r, true); process.exit(75); }, 400);
       return;
     }
     if (p === '/api/fs' && req.method === 'GET') {
