@@ -16,7 +16,7 @@ const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
 const KNOW = path.join(DATA, 'knowledge');
-const VERSION = '0.12.4';
+const VERSION = '0.12.5';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS, KNOW]) fs.mkdirSync(d, { recursive: true });
 
@@ -1853,8 +1853,18 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/update' && req.method === 'POST') {
       const busy = [...rooms.values()].some((r) => runtime(r.id).current || runtime(r.id).queue.length);
       if (busy) return send(res, 409, { error: 'AI가 작업 중이에요. 끝나거나 중지한 뒤에 업데이트해 주세요.' });
+      // AI들이 작업 브랜치에 폴더를 남겨둔 경우: 저장 안 된 변경이 없으면 main으로 돌아가서 받고, 있으면 쉬운 말로 알려줘요
+      const br = (await run('git', ['-C', APP_DIR, 'branch', '--show-current'], { timeout: 10000 })).stdout.trim();
+      let movedFrom = '';
+      if (br !== 'main') {
+        const dirty = (await run('git', ['-C', APP_DIR, 'status', '--porcelain', '--untracked-files=no'], { timeout: 20000 })).stdout.trim();
+        if (dirty) return send(res, 409, { error: `지금 앱 폴더가 '${br || '이름 없는 상태'}' 작업 중이고 저장 안 된 변경이 있어서 자동으로 옮길 수 없어요. 그 작업을 커밋하거나 정리한 뒤 다시 눌러주세요.` });
+        const co = await run('git', ['-C', APP_DIR, 'checkout', 'main'], { timeout: 30000 });
+        if (!co.ok) return send(res, 500, { error: `main으로 돌아가지 못했어요: ${clip((co.stderr || co.stdout).trim(), 200)}` });
+        movedFrom = br;
+      }
       const pull = await run('git', ['-C', APP_DIR, 'pull', '--ff-only'], { timeout: 120000 });
-      if (!pull.ok) return send(res, 500, { error: '받기 실패: ' + clip((pull.stderr || pull.stdout).trim(), 300) });
+      if (!pull.ok) return send(res, 500, { error: '받기 실패: ' + clip((pull.stderr || pull.stdout).trim(), 300) + (movedFrom ? ` (작업 브랜치 '${movedFrom}'에서 main으로 옮긴 상태예요)` : '') });
       send(res, 200, { ok: true, restarting: true });
       broadcast({ type: 'restarting' });
       setTimeout(() => { for (const r of rooms.values()) saveRoom(r, true); process.exit(75); }, 400); // 75 = start.sh가 다시 켜줌
