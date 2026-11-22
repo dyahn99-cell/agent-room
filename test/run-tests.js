@@ -138,6 +138,12 @@ const newRoom = async (title, cwd, teamId) => (await api('/api/rooms', { method:
       check('오픈코드에 차단 권한 전달', /perm=\{"bash":\{"\*":"allow","git push":"deny"/.test(log), 'missing');
       const rules = path.join(TMP, 'codexhome', 'rules', 'agent-room.rules');
       check('코덱스 차단 규칙 파일 생성', fs.existsSync(rules) && fs.readFileSync(rules, 'utf8').includes('prefix_rule(pattern=["git","push"], decision="forbidden")'), 'no rules'); }
+    // 10b. 작성 권한 없는 checker도 Bash는 못 받음 ("작성 권한 없음" 표시와 실제 실행 권한을 맞춤)
+    { const d = W('checker-no-bash'); const rid = await newRoom('확인담당', d); fs.writeFileSync(LOG, '');
+      await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ agents: { claude: { role: 'checker' } } }) });
+      await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@클로드 확인해줘' }) }); await idle(rid);
+      const log = fs.readFileSync(LOG, 'utf8');
+      check('작성 권한 없는 checker는 Bash 허용 목록에 없음', log.includes('"--allowedTools","Read Glob Grep WebSearch WebFetch"'), log.match(/args=\[[^\]]*\]/)?.[0] || 'no args'); }
     // 11. 방 메모가 프롬프트에 들어감
     { const d = W('memo'); const rid = await newRoom('메모', d); fs.writeFileSync(LOG, '');
       await api(`/api/rooms/${rid}`, { method: 'PATCH', body: JSON.stringify({ memo: 'slides 폴더 안에서만 작업' }) });

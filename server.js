@@ -16,7 +16,7 @@ const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
 const KNOW = path.join(DATA, 'knowledge');
-const VERSION = '0.12.1';
+const VERSION = '0.12.2';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS, KNOW]) fs.mkdirSync(d, { recursive: true });
 
@@ -962,7 +962,8 @@ const adapters = {
       const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
       if (CLAUDE_PP) args.push('--permission-prompts', 'none');
       if (writer) args.push('--permission-mode', 'acceptEdits', '--allowedTools', 'Bash Read Edit Write Glob Grep WebSearch WebFetch TodoWrite');
-      else args.push('--permission-mode', 'dontAsk', '--allowedTools', 'Read Glob Grep WebSearch WebFetch' + (c.role === 'checker' ? ' Bash' : ''));
+      // checker도 비작성자라 Bash는 안 줌 — "작성 권한 없음" 표시와 실제 실행 권한을 맞추기 위함
+      else args.push('--permission-mode', 'dontAsk', '--allowedTools', 'Read Glob Grep WebSearch WebFetch');
       if (st.session) args.push('--resume', st.session);
       if (knowList(mid).length) args.push('--add-dir', knowDir(mid), '--verbose');
       if (c.model) args.push('--model', c.model);
