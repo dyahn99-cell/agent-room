@@ -99,10 +99,10 @@ async function agyMain() {
   const lastUser = (prompt.match(/\[(사용자|클로드|코덱스|오픈코드|안티그래비티)\][^\n]*/g) || []).pop() || '';
   if (/실패/.test(lastUser)) { out({ event: 'result', result: { status: 'ERROR', error: 'quota exceeded 429' } }); return; }
   if (writer && /써줘/.test(lastUser)) fs.writeFileSync('hello-agy.txt', 'hello from agy\n');
-  out({ event: 'delta', text: '안티그래비티입니다. ' });
+  out({ event: 'step_update', step_update: { conversation_id: 'agy-conv-1', step_index: 1, state: 'ACTIVE', step_type: 'agent_response', text_delta: '안티그래비티입니다. ' } });
   await sleep(100);
-  out({ event: 'delta', text: '확인했어요.' });
-  out({ event: 'result', result: { status: 'SUCCESS', response: `안티그래비티입니다. "${lastUser.slice(0, 40)}" 확인했어요.${writer ? ' 파일을 수정했어요.' : ' 읽기만 했어요.'}` } });
+  out({ event: 'step_update', step_update: { conversation_id: 'agy-conv-1', step_index: 1, state: 'DONE', step_type: 'agent_response', text_delta: '확인했어요.', usage: { input_tokens: 100, output_tokens: 20 } } });
+  out({ event: 'result', result: { conversation_id: 'agy-conv-1', usage: { input_tokens: 1000, output_tokens: 50, thinking_tokens: 10, cache_read_tokens: 0 }, status: 'SUCCESS', response: `안티그래비티입니다. "${lastUser.slice(0, 40)}" 확인했어요.${writer ? ' 파일을 수정했어요.' : ' 읽기만 했어요.'}` } });
 }
 async function acpMain() {
   // ACP(Agent Client Protocol) 흉내: stdin으로 JSON-RPC를 받고 stdout으로 답함

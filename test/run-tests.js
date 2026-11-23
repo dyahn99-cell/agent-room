@@ -388,6 +388,10 @@ const newRoom = async (title, cwd, teamId) => (await api('/api/rooms', { method:
       const r = await idle(rid); const m = r.messages.filter((x) => x.role === 'agent').pop();
       const lg = fs.readFileSync(LOG, 'utf8');
       check('안티그래비티가 답함 (읽기 전용 · 구독 키 비움)', m.agent === 'antigravity' && m.status === 'done' && /안티그래비티입니다/.test(m.text) && /writer=false/.test(lg) && lg.includes('"--sandbox"') && !lg.includes('accept-edits') && lg.includes('gkey=""'), JSON.stringify([m.status, m.text, lg.slice(0, 300)]));
+      { fs.writeFileSync(LOG, '');
+        await api(`/api/rooms/${rid}/messages`, { method: 'POST', body: JSON.stringify({ text: '@안티그래비티 또 안녕' }) }); await idle(rid);
+        const lg2 = fs.readFileSync(LOG, 'utf8'); const us = (await api('/api/usage')).body;
+        check('안티그래비티: 실제 이벤트 형식(step_update)·사용 토큰 집계·대화 이어가기', ((us.antigravity || {}).tokensToday || 0) >= 1060 && lg2.includes('"--conversation","agy-conv-1"'), JSON.stringify([us.antigravity, lg2.slice(0, 300)])); }
       const mods = (await api('/api/models')).body;
       const am = (mods.antigravity || {}).models || [];
       check('안티그래비티 모델 목록 (agy models)', am.length === 4 && am[1].id === 'gemini-3.1-pro-high' && /Gemini 3.1 Pro \(High\)/.test(am[1].name) && am[3].id === 'claude-opus-5-5', JSON.stringify(am));

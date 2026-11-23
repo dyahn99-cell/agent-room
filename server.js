@@ -16,7 +16,7 @@ const UPLOADS = path.join(DATA, 'uploads');
 const SHADOW = path.join(DATA, 'shadow');
 const AVATARS = path.join(DATA, 'avatars');
 const KNOW = path.join(DATA, 'knowledge');
-const VERSION = '0.13.0';
+const VERSION = '0.13.1';
 const PIDS_FILE = path.join(DATA, 'pids.json');
 for (const d of [DATA, ROOMS_DIR, UPLOADS, SHADOW, AVATARS, KNOW]) fs.mkdirSync(d, { recursive: true });
 
@@ -1104,14 +1104,25 @@ const adapters = {
       if (writer) args.push('--mode', 'accept-edits');
       args.push('--sandbox');
       if (ac(room, mid).model) args.push('--model', ac(room, mid).model);
+      if (st.session) args.push('--conversation', st.session); // 이전 대화 이어가기
       const stdin = JSON.stringify({ event: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt.text }] } }) + '\n';
       // 종량제 키가 섞여 요금이 나가지 않게, 구독 로그인만 쓰도록 키 환경변수는 비워요
       return { args, stdin, env: { GEMINI_API_KEY: '', GOOGLE_API_KEY: '' } };
     },
     handle(ev, ctx) {
       if (ev.event === 'delta' && ev.text) return ctx.live(String(ev.text));
+      // 실제 agy: step_update { conversation_id, step_index, state, step_type, text_delta, usage }
+      if (ev.event === 'step_update' && ev.step_update) {
+        const u = ev.step_update;
+        if (u.conversation_id) ctx.session(u.conversation_id);
+        if (u.step_type === 'agent_response') { if (u.text_delta) ctx.live(String(u.text_delta)); return; }
+        if (u.step_type && !/thinking|reasoning/i.test(u.step_type)) ctx.step({ id: 'agy' + (u.step_index ?? ''), kind: kindOf(u.step_type), title: u.title || u.step_type.replace(/_/g, ' ') });
+        return;
+      }
       if (ev.event === 'result' && ev.result && typeof ev.result === 'object') {
         const r = ev.result;
+        if (r.conversation_id) ctx.session(r.conversation_id);
+        if (r.usage) addTokens('antigravity', (r.usage.input_tokens || 0) - (r.usage.cache_read_tokens || 0) + (r.usage.output_tokens || 0) + (r.usage.thinking_tokens || 0));
         if (r.status === 'SUCCESS') return ctx.final(String(r.response || ''));
         return ctx.error(String(r.error || r.status || '실패했어요'));
       }
